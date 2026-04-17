@@ -8,13 +8,13 @@ A complete online multiplayer mod for Cuphead with a user-friendly installer.
 
 ## Features
 
-- ✨ Online co-op multiplayer (Steam P2P networking)
-- 🎯 Automatic Cuphead detection via Steam
-- 📦 Automatic BepInEx installation (if not present)
-- ⚡ One-click mod installation
-- 📊 Real-time progress tracking
-- 🚀 Portable executable (no admin rights needed)
-- 🔄 Safe and fully removable
+- Online co-op multiplayer (Steam P2P networking)
+- Automatic Cuphead detection via Steam
+- Automatic BepInEx installation (if not present)
+- One-click mod installation
+- Real-time progress tracking
+- Portable executable (no admin rights needed)
+- Safe and fully removable
 
 ## Requirements
 
