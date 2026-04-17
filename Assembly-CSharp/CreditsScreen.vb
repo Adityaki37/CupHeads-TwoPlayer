@@ -16,6 +16,9 @@ Public Class CreditsScreen
 	Public Sub Init(checkIfDead As Boolean)
 		Me.input = New CupheadInput.AnyPlayerInput(False)
 		Me.verticalLayoutGroup = Me.content.GetComponent(Of VerticalLayoutGroup)()
+		' Fix overlapping credits text by increasing spacing
+		Me.verticalLayoutGroup.spacing = 15F
+		Me.verticalLayoutGroup.childForceExpandHeight = False
 		MyBase.StartCoroutine(Me.credits_cr())
 		MyBase.StartCoroutine(Me.skip_cr())
 		MyBase.StartCoroutine(Me.fastForward_cr())
