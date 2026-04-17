@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path   = require('path');
 const fs     = require('fs');
 const https  = require('https');
@@ -123,14 +123,75 @@ ipcMain.handle('browse-folder', async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
-ipcMain.handle('check-install-state', (_, dir) => {
-  if (!dir || !fs.existsSync(dir)) return { valid: false };
-  return {
-    valid:      fs.existsSync(path.join(dir, 'Cuphead.exe')),
-    hasBepInEx: fs.existsSync(path.join(dir, 'BepInEx')),
-    hasPlugin:  fs.existsSync(path.join(dir, 'BepInEx', 'plugins', 'CupheadOnline', 'CupheadOnline.dll')),
+function getInstallState(dir) {
+  if (!dir || !fs.existsSync(dir)) {
+    return {
+      valid: false,
+      hasBepInEx: false,
+      hasBepInExCore: false,
+      hasDoorstop: false,
+      hasPlugin: false,
+      ready: false,
+    };
+  }
+
+  const state = {
+    valid:         fs.existsSync(path.join(dir, 'Cuphead.exe')),
+    hasBepInEx:    fs.existsSync(path.join(dir, 'BepInEx')),
+    hasBepInExCore: fs.existsSync(path.join(dir, 'BepInEx', 'core', 'BepInEx.dll')),
+    hasDoorstop:   fs.existsSync(path.join(dir, 'winhttp.dll')),
+    hasPlugin:     fs.existsSync(path.join(dir, 'BepInEx', 'plugins', 'CupheadOnline', 'CupheadOnline.dll')),
   };
+  state.ready = state.valid && state.hasBepInExCore && state.hasDoorstop && state.hasPlugin;
+  return state;
+}
+
+function verifyInstall(dir) {
+  const checks = getInstallState(dir);
+  if (!checks.valid) {
+    return {
+      ok: false,
+      message: 'Cuphead.exe was not found in that folder.',
+      checks,
+    };
+  }
+
+  const missing = [];
+  if (!checks.hasBepInExCore) missing.push('BepInEx core');
+  if (!checks.hasDoorstop) missing.push('winhttp.dll bootstrap');
+  if (!checks.hasPlugin) missing.push('CupheadOnline.dll');
+
+  return {
+    ok: missing.length === 0,
+    message: missing.length === 0
+      ? 'Install looks good. Cuphead, BepInEx, and the plugin are all in place.'
+      : 'Missing: ' + missing.join(', ') + '.',
+    checks,
+  };
+}
+
+ipcMain.handle('check-install-state', (_, dir) => getInstallState(dir));
+
+ipcMain.handle('open-folder', async (_, dir) => {
+  if (!dir || !fs.existsSync(dir))
+    return { ok: false, message: 'Pick a valid Cuphead folder first.' };
+
+  const err = await shell.openPath(dir);
+  return err
+    ? { ok: false, message: err }
+    : { ok: true, message: 'Opened the Cuphead folder.' };
 });
+
+ipcMain.handle('launch-steam', async () => {
+  try {
+    await shell.openExternal('steam://open/main');
+    return { ok: true, message: 'Sent a launch request to Steam.' };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+});
+
+ipcMain.handle('verify-install', (_, dir) => verifyInstall(dir));
 
 // ── Architecture detection (PE header) ────────────────────────────────────
 
@@ -196,7 +257,7 @@ const BEPINEX = {
 function fetchJson(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
-      headers: { 'User-Agent': 'CupheadOnline-Installer' },
+      headers: { 'User-Agent': 'CupHeads-Installer' },
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => body += chunk);

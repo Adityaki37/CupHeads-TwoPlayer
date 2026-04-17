@@ -291,6 +291,23 @@
           </div>
         </div>
 
+        <div class="utility-row">
+          <button class="btn-ghost btn-sm" id="btn-open-folder" disabled>
+            <svg class="icon-14"><use href="#i-folder"/></svg>
+            <span>Open Folder</span>
+          </button>
+          <button class="btn-ghost btn-sm" id="btn-verify" disabled>
+            <svg class="icon-14"><use href="#i-shield"/></svg>
+            <span>Verify Install</span>
+          </button>
+          <button class="btn-ghost btn-sm" id="btn-launch-steam">
+            <svg class="icon-14"><use href="#i-broadcast"/></svg>
+            <span>Launch Steam</span>
+          </button>
+        </div>
+
+        <div class="tool-note hidden" id="detect-tool-note"></div>
+
         <div class="page-footer">
           <button class="btn-ghost" id="btn-d-back">
             <svg class="icon-14"><use href="#i-arrow-l"/></svg>
@@ -368,12 +385,22 @@
           <svg class="icon-14"><use href="#i-info"/></svg>
           <span>Both players need this mod installed.</span>
         </div>
-        <button class="btn-stamp" id="btn-done">
-          <span class="btn-stamp-face">
-            <span class="btn-stamp-text">Close Installer</span>
-          </span>
-          <span class="btn-stamp-shadow"></span>
-        </button>
+        <div class="done-actions">
+          <button class="btn-ghost" id="btn-done-open-folder">
+            <svg class="icon-14"><use href="#i-folder"/></svg>
+            <span>Open Folder</span>
+          </button>
+          <button class="btn-ghost" id="btn-done-launch-steam">
+            <svg class="icon-14"><use href="#i-broadcast"/></svg>
+            <span>Launch Steam</span>
+          </button>
+          <button class="btn-stamp" id="btn-done">
+            <span class="btn-stamp-face">
+              <span class="btn-stamp-text">Close Installer</span>
+            </span>
+            <span class="btn-stamp-shadow"></span>
+          </button>
+        </div>
       </div>
     </section>
 

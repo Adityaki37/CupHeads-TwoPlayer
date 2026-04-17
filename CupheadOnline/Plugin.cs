@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -21,6 +22,16 @@ namespace CupheadOnline
         public static ManualLogSource  Log      { get; private set; }
         public static SteamNetManager  Net      { get; private set; }
 
+        static ConfigEntry<bool> _cfgShowConnectionHud;
+        static ConfigEntry<bool> _cfgVerboseLogging;
+        static ConfigEntry<bool> _cfgAutoOpenSteamFriends;
+        static ConfigEntry<bool> _cfgShowCreditsMenu;
+
+        public static bool ShowConnectionHud => _cfgShowConnectionHud == null || _cfgShowConnectionHud.Value;
+        public static bool VerboseLoggingEnabled => _cfgVerboseLogging != null && _cfgVerboseLogging.Value;
+        public static bool AutoOpenSteamFriends => _cfgAutoOpenSteamFriends != null && _cfgAutoOpenSteamFriends.Value;
+        public static bool ShowCreditsMenu => _cfgShowCreditsMenu == null || _cfgShowCreditsMenu.Value;
+
         // ──────────────────────────────────────────────────────────────────────
         //  Unity lifecycle
         // ──────────────────────────────────────────────────────────────────────
@@ -29,6 +40,15 @@ namespace CupheadOnline
             Instance = this;
             Log      = Logger;
             Log.LogInfo("CupheadOnline " + PluginInfo.VERSION + " loading\u2026");
+
+            _cfgShowConnectionHud = Config.Bind("UI", "ShowConnectionHud", true,
+                "Show the in-game connection HUD with status and ping quality.");
+            _cfgVerboseLogging = Config.Bind("Debug", "VerboseLogging", false,
+                "Enable extra diagnostic logging for menu and network helpers.");
+            _cfgAutoOpenSteamFriends = Config.Bind("UI", "AutoOpenSteamFriendsOnJoin", false,
+                "Open the Steam Friends overlay immediately when Join Game is selected.");
+            _cfgShowCreditsMenu = Config.Bind("UI", "ShowCreditsMenu", true,
+                "Show the custom Credits entry on the title screen.");
 
             // Networking manager — Steam P2P transport (lobby + invite flow)
             Net = new SteamNetManager();
@@ -121,12 +141,36 @@ namespace CupheadOnline
             Net?.Dispose();
             MultiplayerSession.End();
         }
+
+        public static void LogVerbose(string msg)
+        {
+            if (VerboseLoggingEnabled && Log != null)
+                Log.LogInfo("[Verbose] " + msg);
+        }
+
+        public static string BuildDiagnosticsReport()
+        {
+            string nl = Environment.NewLine;
+            string report = "CupheadOnline Diagnostics" + nl
+                          + "Version: " + PluginInfo.VERSION + nl
+                          + "HUD Enabled: " + ShowConnectionHud + nl
+                          + "Verbose Logging: " + VerboseLoggingEnabled + nl
+                          + "Auto Open Steam Friends: " + AutoOpenSteamFriends + nl
+                          + "Show Credits Menu: " + ShowCreditsMenu + nl;
+
+            if (Net != null)
+                report += nl + Net.BuildDiagnosticsReport();
+            else
+                report += nl + "Network: not initialized";
+
+            return report.TrimEnd();
+        }
     }
 
     internal static class PluginInfo
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupheadOnline";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.0.1";
     }
 }

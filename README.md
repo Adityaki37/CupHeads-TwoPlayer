@@ -1,94 +1,87 @@
 # CupHeads
 
-A complete online multiplayer mod for Cuphead with a user-friendly installer.
+Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod setup for you.
 
-## About
+## What this repo contains
 
-**CupheadOnline** adds online co-op multiplayer to Cuphead, allowing two players to fight bosses together over the internet. The mod is production-ready with automatic BepInEx installation and one-click setup.
+- `CupheadOnline/` - the BepInEx + Harmony mod
+- `CupheadInstaller/` - the Electron installer app
+- `build.ps1` - root build script that builds the mod and packages the Electron installer
 
 ## Features
 
-- Online co-op multiplayer (Steam P2P networking)
-- Automatic Cuphead detection via Steam
-- Automatic BepInEx installation (if not present)
+- Steam P2P multiplayer transport
+- Steam lobby and invite flow
+- Automatic Cuphead detection through Steam
+- Automatic BepInEx installation when needed
 - One-click mod installation
-- Real-time progress tracking
-- Portable executable (no admin rights needed)
-- Safe and fully removable
+- Portable desktop installer
 
 ## Requirements
 
 - Windows 10 or later
-- Cuphead installed via Steam
-- Internet connection (for BepInEx download if needed)
+- Cuphead installed through Steam
+- Internet connection for BepInEx download during install
 
 ## Quick Start
 
-1. Download `CupheadOnline-Installer.exe` from [Releases](https://github.com/Germanized/CupHeads/releases)
-2. Run the installer (no admin rights required)
-3. Select your Cuphead installation folder
-4. Click "Install" — it handles everything automatically
-5. Launch Cuphead via Steam and play together!
+1. Download `Cupheads.exe` from [Releases](https://github.com/Germanized/CupHeads/releases).
+2. Run the installer.
+3. Let it detect your Cuphead folder, or browse to it manually.
+4. Click Install.
+5. Launch Cuphead through Steam.
 
-## How It Works
+If you test outside the Steam launcher, you may need a `steam_appid.txt` next to `Cuphead.exe`.
 
-The installer:
-- **Detects** your Cuphead installation automatically
-- **Downloads & installs** BepInEx 5.4.23.2 (mod loader) if needed
-- **Copies** the CupheadOnline mod to `Cuphead/BepInEx/plugins/CupheadOnline/`
-- **Activates** the mod via Harmony patches and LiteNetLib networking
+## How installation works
 
-The mod enables the game's built-in 2P co-op system (`PlayerManager.Multiplayer = true`) and handles player synchronization, input replication, and networked boss logic.
+The Electron installer:
 
-## Troubleshooting
+- detects your Cuphead install
+- installs BepInEx 5 if it is missing
+- copies `CupheadOnline.dll` into `Cuphead\\BepInEx\\plugins\\CupheadOnline\\`
 
-**Cuphead not detected?**
-- Ensure Cuphead is installed via Steam in the default location
-- Manually browse to your Steam Cuphead folder if auto-detection fails
-- Check that you have write permissions to the Cuphead folder
+The mod then patches the game's menu and gameplay flow through Harmony and uses Steamworks P2P for multiplayer.
 
-**Installation issues?**
-- The installer requires write access to the Cuphead directory
-- Close Cuphead and the Steam launcher before installing
-- Try running the installer as Administrator if needed
+## Building from source
 
-## Building from Source
+### Build the mod only
 
-### Build the mod:
-```bash
-dotnet build CupheadOnline/CupheadOnline.csproj -c Release
+```powershell
+dotnet build .\CupheadOnline\CupheadOnline.csproj -c Release
 ```
 
-### Build the installer:
-```bash
-cd CupheadInstaller
+### Build the full release package
+
+```powershell
+.\build.ps1 -Release
+```
+
+That produces:
+
+- `dist\CupheadOnline.dll`
+- `dist\Cupheads.exe`
+
+### Build the installer manually
+
+```powershell
+cd .\CupheadInstaller
 npm install
 npm run dist
 ```
 
-Output: `CupheadInstaller/dist/CupheadOnline-Installer.exe`
+The packaged installer is written to `CupheadInstaller\dist\Cupheads.exe`.
 
-## Technical Stack
+## Tech stack
 
-- **Mod Framework:** BepInEx 5.4.23.2 (Harmony 2 patches)
-- **Networking:** LiteNetLib 1.1.0 (UDP with sequencing)
-- **Mod Language:** C# with decompiled Assembly-CSharp.vb references
-- **Installer:** Electron + Node.js (portable executable)
-
-## GitHub Release Package
-
-- **Source:** Full `CupheadOnline/` and `CupheadInstaller/` directories
-- **Release Asset:** `CupheadOnline-Installer.exe` (portable, all-in-one)
-- **Auto-Setup:** The installer detects and installs the correct BepInEx version for your system
-
-## License
-
-See [LICENSE](LICENSE) file for details.
+- BepInEx 5
+- Harmony 2
+- Steamworks P2P
+- Electron + Node.js
 
 ## Credits
 
-- CupheadOnline mod by Germanized
-- BepInEx team for the mod loader
-- Harmony team for method patching
-- LiteNetLib team for networking
-- Electron team for the installer framework
+- Germanized and Sh0kr for the mod
+- BepInEx for the mod framework
+- Harmony for patching
+- Electron for the installer shell

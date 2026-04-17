@@ -33,12 +33,20 @@ namespace CupheadOnline.Net
         // ── Public ────────────────────────────────────────────────────────────
         public bool IsSteamReady => _steamReady;
         public bool IsConnected  => _state == NetState.Connected;
+        public bool IsHost       => _isHost;
         public int  Latency      { get; private set; }
         public string SteamUnavailableStatus => _steamUnavailableStatus;
+        public string LastStatusMessage => _lastStatusMessage;
+        public string LastFailureReason => _lastFailureReason;
+        public string CurrentStateName => _state.ToString();
+        public string CurrentPeerName => FriendName(_peerId);
+        public string CurrentLobbyId => _lobbyId == CSteamID.Nil ? string.Empty : _lobbyId.m_SteamID.ToString();
+
+        public bool CanInviteFriend => _steamReady && _isHost && _lobbyId != CSteamID.Nil;
+        public bool CanRetryLastAction => _lastRetryIntent != RetryIntent.None;
 
         /// <summary>True while a critical async operation is in flight (host/join pending).</summary>
         public bool IsInputLocked => _state == NetState.CreatingLobby
-                                  || _state == NetState.WaitingInLobby
                                   || _state == NetState.JoiningLobby
                                   || _state == NetState.WaitingHello
                                   || _state == NetState.WaitingWelcome
@@ -86,7 +94,7 @@ namespace CupheadOnline.Net
 
             CSteamID localId = SteamUser.GetSteamID();
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine("LOBBY");
+            sb.AppendLine("LOBBY #" + _lobbyId.m_SteamID);
             for (int i = 0; i < n; i++)
             {
                 CSteamID member = SteamMatchmaking.GetLobbyMemberByIndex(_lobbyId, i);
@@ -122,6 +130,171 @@ namespace CupheadOnline.Net
         /// <summary>Fired on the main thread when the Steam overlay is closed by the user.</summary>
         public Action OnOverlayClosed;
 
+        public string GetSteamBadgeText()
+        {
+            if (!_steamReady)
+            {
+                if (_steamUnavailableStatus.IndexOf("steam_appid.txt", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return "NOT VIA STEAM";
+                return "STEAM OFFLINE";
+            }
+
+            if (!IsOverlayEnabled())
+                return "OVERLAY OFF";
+            if (_state == NetState.Connected)
+                return "CONNECTED";
+            if (_lobbyId != CSteamID.Nil)
+                return _isHost ? "HOSTING LOBBY" : "IN LOBBY";
+            return "STEAM READY";
+        }
+
+        public string GetRetryActionLabel()
+        {
+            switch (_lastRetryIntent)
+            {
+                case RetryIntent.Host:
+                    return "RETRY HOST";
+                case RetryIntent.JoinLobby:
+                    return _lastRetryLobbyId == CSteamID.Nil ? "RETRY JOIN" : "REJOIN LOBBY";
+                default:
+                    return "RETRY LAST";
+            }
+        }
+
+        public bool OpenInviteDialog(out string status)
+        {
+            status = string.Empty;
+            if (!EnsureSteamReady())
+            {
+                status = _steamUnavailableStatus;
+                return false;
+            }
+            if (!_isHost || _lobbyId == CSteamID.Nil)
+            {
+                status = "Host a lobby first, then invite a friend.";
+                return false;
+            }
+            if (!IsOverlayEnabled())
+            {
+                status = "Steam overlay is unavailable.\nEnable the overlay and try again.";
+                return false;
+            }
+
+            SteamFriends.ActivateGameOverlayInviteDialog(_lobbyId);
+            status = "Invite dialog opened for lobby #" + _lobbyId.m_SteamID + ".";
+            Plugin.LogVerbose("[SteamNet] Invite dialog opened.");
+            return true;
+        }
+
+        public bool OpenFriendsOverlay(out string status)
+        {
+            status = string.Empty;
+            if (!EnsureSteamReady())
+            {
+                status = _steamUnavailableStatus;
+                return false;
+            }
+            if (!IsOverlayEnabled())
+            {
+                status = "Steam overlay is unavailable.\nEnable the overlay and try again.";
+                return false;
+            }
+
+            SteamFriends.ActivateGameOverlay("Friends");
+            status = "Steam overlay opened.\nWaiting for invite...";
+            Plugin.LogVerbose("[SteamNet] Friends overlay opened.");
+            return true;
+        }
+
+        public bool TryRetryLastAction(out string status)
+        {
+            status = string.Empty;
+
+            switch (_lastRetryIntent)
+            {
+                case RetryIntent.Host:
+                    if (StartHost())
+                    {
+                        status = "Retrying host setup...";
+                        return true;
+                    }
+                    status = _steamUnavailableStatus;
+                    return false;
+
+                case RetryIntent.JoinLobby:
+                    if (_lastRetryLobbyId == CSteamID.Nil)
+                    {
+                    status = "No previous lobby is available to rejoin yet.";
+                    return false;
+                    }
+                    if (JoinLobby(_lastRetryLobbyId))
+                    {
+                        status = "Retrying lobby join...";
+                        return true;
+                    }
+                    status = _steamUnavailableStatus;
+                    return false;
+
+                default:
+                    status = "No previous action is available to retry.";
+                    return false;
+            }
+        }
+
+        public bool TryJoinLobbyById(string rawLobbyId, out string status)
+        {
+            status = string.Empty;
+            if (!EnsureSteamReady())
+            {
+                status = _steamUnavailableStatus;
+                return false;
+            }
+
+            CSteamID lobbyId;
+            if (!TryParseLobbyId(rawLobbyId, out lobbyId))
+            {
+                status = "No Steam lobby ID was found in the clipboard.";
+                return false;
+            }
+
+            if (JoinLobby(lobbyId))
+            {
+                status = "Joining lobby #" + lobbyId.m_SteamID + "...";
+                return true;
+            }
+
+            status = _steamUnavailableStatus;
+            return false;
+        }
+
+        public string BuildDiagnosticsReport()
+        {
+            var nl = Environment.NewLine;
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("Steam Ready: " + _steamReady);
+            sb.AppendLine("State: " + _state);
+            sb.AppendLine("Is Host: " + _isHost);
+            sb.AppendLine("Overlay Enabled: " + IsOverlayEnabled());
+            sb.AppendLine("Latency: " + Latency + "ms");
+            sb.AppendLine("Lobby ID: " + (_lobbyId == CSteamID.Nil ? "(none)" : _lobbyId.m_SteamID.ToString()));
+            sb.AppendLine("Peer: " + (_peerId == CSteamID.Nil ? "(none)" : FriendName(_peerId) + " [" + _peerId.m_SteamID + "]"));
+            sb.AppendLine("Retry Action: " + GetRetryActionLabel());
+            sb.AppendLine("Last Status: " + (_lastStatusMessage ?? string.Empty));
+            sb.AppendLine("Last Failure: " + (_lastFailureReason ?? string.Empty));
+
+            if (!_steamReady)
+                sb.AppendLine("Steam Status: " + _steamUnavailableStatus.Replace(nl, " | "));
+
+            string presence = GetLobbyPresence();
+            if (!string.IsNullOrEmpty(presence))
+            {
+                sb.AppendLine("Presence:");
+                sb.AppendLine(presence);
+            }
+
+            return sb.ToString().TrimEnd();
+        }
+
         // ── State ─────────────────────────────────────────────────────────────
         enum NetState
         {
@@ -136,10 +309,20 @@ namespace CupheadOnline.Net
             Error,
         }
 
+        enum RetryIntent
+        {
+            None,
+            Host,
+            JoinLobby,
+        }
+
         NetState _state  = NetState.Idle;
         bool     _isHost;
         CSteamID _peerId  = CSteamID.Nil;
         CSteamID _lobbyId = CSteamID.Nil;
+        RetryIntent _lastRetryIntent = RetryIntent.None;
+        CSteamID    _lastRetryLobbyId = CSteamID.Nil;
+        string      _lastRetryPeerName = string.Empty;
 
         // ── Callbacks (hold references — prevent GC) ──────────────────────────
         Callback<P2PSessionRequest_t>      _cbP2PReq;
@@ -169,6 +352,8 @@ namespace CupheadOnline.Net
         bool     _steamInitAttempted;
         bool     _steamReady;
         string   _steamUnavailableStatus = "Steam is unavailable.\nLaunch Cuphead through Steam.";
+        string   _lastStatusMessage;
+        string   _lastFailureReason;
 
         // ── Constructor ───────────────────────────────────────────────────────
 
@@ -224,6 +409,9 @@ namespace CupheadOnline.Net
         {
             if (!EnsureSteamReady()) return false;
 
+            _lastRetryIntent = RetryIntent.Host;
+            _lastRetryLobbyId = CSteamID.Nil;
+            _lastRetryPeerName = string.Empty;
             Shutdown();
             _isHost = true;
             SteamNetworking.AllowP2PPacketRelay(true);
@@ -242,8 +430,7 @@ namespace CupheadOnline.Net
             if (ioFail || r.m_eResult != EResult.k_EResultOK)
             {
                 MultiplayerSession.End();
-                SetState(NetState.Error,
-                    "Could not create lobby.\nPlease press B and try again.");
+                SetState(NetState.Error, DescribeLobbyCreateFailure(r.m_eResult, ioFail));
                 Plugin.Log.LogWarning("[SteamNet] Lobby creation failed: " + r.m_eResult);
                 return;
             }
@@ -252,9 +439,11 @@ namespace CupheadOnline.Net
 
             SetState(NetState.WaitingInLobby,
                 "Waiting for player...\n"
-                + "Invite a friend using the Steam overlay.");
+                + "Use Invite Friend to send another Steam invite.");
             Plugin.Log.LogInfo("[SteamNet] Lobby: " + _lobbyId);
-            SteamFriends.ActivateGameOverlayInviteDialog(_lobbyId);
+            string inviteStatus;
+            if (!OpenInviteDialog(out inviteStatus))
+                FireStatus(inviteStatus);
         }
 
         void OnP2PSessionRequest(P2PSessionRequest_t req)
@@ -279,10 +468,12 @@ namespace CupheadOnline.Net
         {
             if (!EnsureSteamReady()) return false;
 
+            _lastRetryIntent = RetryIntent.JoinLobby;
+            _lastRetryLobbyId = lobbyId;
             Shutdown();
             _isHost = false;
             SteamNetworking.AllowP2PPacketRelay(true);
-            SetState(NetState.JoiningLobby, "Joining lobby...");
+            SetState(NetState.JoiningLobby, "Joining lobby #" + lobbyId.m_SteamID + "...");
             _crLobbyEntered = CallResult<LobbyEnter_t>.Create(OnLobbyEntered);
             _crLobbyEntered.Set(SteamMatchmaking.JoinLobby(lobbyId));
             return true;
@@ -307,11 +498,12 @@ namespace CupheadOnline.Net
                        != (uint)EChatRoomEnterResponse.k_EChatRoomEnterResponseSuccess)
             {
                 SetState(NetState.Error,
-                    "Could not join lobby.\nPlease press B and try again.");
+                    DescribeLobbyJoinFailure((EChatRoomEnterResponse)r.m_EChatRoomEnterResponse, ioFail));
                 return;
             }
             _lobbyId = new CSteamID(r.m_ulSteamIDLobby);
             _peerId  = SteamMatchmaking.GetLobbyOwner(_lobbyId);
+            _lastRetryPeerName = FriendName(_peerId);
 
             MultiplayerSession.StartAsClient();
             SetState(NetState.WaitingWelcome,
@@ -392,7 +584,7 @@ namespace CupheadOnline.Net
             MainThreadQueue.Enqueue(() =>
             {
                 Plugin.Log.LogWarning("[SteamNet] P2P fail, error=" + err);
-                HandleDisconnect("Connection error (" + err + ")");
+                HandleDisconnect(DescribeP2PFailure(err));
             });
         }
 
@@ -412,7 +604,7 @@ namespace CupheadOnline.Net
             MainThreadQueue.Enqueue(() =>
             {
                 Plugin.Log.LogInfo("[SteamNet] " + name + " left the lobby.");
-                HandleDisconnect(name + " disconnected.");
+                HandleDisconnect(name + " left the lobby.");
             });
         }
 
@@ -426,6 +618,8 @@ namespace CupheadOnline.Net
         void HandleDisconnect(string reason)
         {
             bool wasConnected = _state == NetState.Connected;
+            string friendlyReason = string.IsNullOrEmpty(reason) ? "Connection closed." : reason;
+            _lastFailureReason = friendlyReason;
             if (_steamReady && _peerId != CSteamID.Nil)
                 SteamNetworking.CloseP2PSessionWithUser(_peerId);
             _peerId          = CSteamID.Nil;
@@ -436,15 +630,15 @@ namespace CupheadOnline.Net
             {
                 // Host stays in lobby — reset to WaitingInLobby so another player can join
                 SetState(NetState.WaitingInLobby,
-                    reason + "\n\nWaiting for next player...\n"
-                    + "Invite a friend using the Steam overlay.");
-                if (wasConnected) ConnectionHUD.ShowDisconnected(reason);
+                    friendlyReason + "\n\nWaiting for next player...\n"
+                    + "Use Invite Friend to send another Steam invite.");
+                if (wasConnected) ConnectionHUD.ShowDisconnected(friendlyReason);
             }
             else
             {
                 SetState(NetState.Error,
-                    "Could not connect to player.\nPress B and try again.");
-                if (wasConnected) ConnectionHUD.ShowDisconnected(reason);
+                    friendlyReason + "\n\nUse Retry Last or Join Game to try again.");
+                if (wasConnected) ConnectionHUD.ShowDisconnected(friendlyReason);
             }
         }
 
@@ -478,7 +672,7 @@ namespace CupheadOnline.Net
                     {
                         MultiplayerSession.End();
                         SetState(NetState.Error,
-                            "Could not create lobby.\nPlease press B and try again.");
+                            "Steam took too long to create the lobby.\nUse Retry Last or Host Game to try again.");
                     }
                     return;
 
@@ -487,7 +681,7 @@ namespace CupheadOnline.Net
                     {
                         MultiplayerSession.End();
                         SetState(NetState.Error,
-                            "Could not connect to player.\nPress B and try again.");
+                            "Steam took too long to join the lobby.\nUse Retry Last or Join Game to try again.");
                     }
                     return;
 
@@ -495,7 +689,7 @@ namespace CupheadOnline.Net
                 case NetState.WaitingWelcome:
                 case NetState.WaitingReady:
                     if (elapsed > HANDSHAKE_TIMEOUT)
-                        HandleDisconnect("Handshake timed out.");
+                        HandleDisconnect("The handshake with " + FriendName(_peerId) + " timed out.");
                     return;
 
                 case NetState.WaitingInLobby:
@@ -505,7 +699,7 @@ namespace CupheadOnline.Net
             // Connected: keepalive + peer timeout check
             if ((DateTime.UtcNow - _lastReceive).TotalMilliseconds > PEER_TIMEOUT_MS)
             {
-                HandleDisconnect("Peer timed out.");
+                HandleDisconnect(FriendName(_peerId) + " stopped responding.");
                 return;
             }
 
@@ -583,7 +777,7 @@ namespace CupheadOnline.Net
             // ── Graceful disconnect ───────────────────────────────────────────
             if (type == (byte)PacketType.Disconnect)
             {
-                HandleDisconnect("Remote disconnected.");
+                HandleDisconnect(FriendName(sender) + " disconnected.");
                 return;
             }
 
@@ -695,6 +889,9 @@ namespace CupheadOnline.Net
         {
             _state            = s;
             _stateEnteredTime = Time.realtimeSinceStartup;
+            _lastStatusMessage = status;
+            if (s == NetState.Error)
+                _lastFailureReason = status;
             FireStatus(status);
             Plugin.Log.LogInfo("[SteamNet] → " + s + ": " + status);
         }
@@ -730,6 +927,13 @@ namespace CupheadOnline.Net
             return false;
         }
 
+        bool IsOverlayEnabled()
+        {
+            if (!_steamReady) return false;
+            try { return SteamUtils.IsOverlayEnabled(); }
+            catch { return false; }
+        }
+
         string BuildSteamUnavailableStatus()
         {
             string status = "Steam is unavailable.\nLaunch Cuphead through Steam.";
@@ -750,6 +954,97 @@ namespace CupheadOnline.Net
             }
 
             return status;
+        }
+
+        bool TryParseLobbyId(string rawLobbyId, out CSteamID lobbyId)
+        {
+            lobbyId = CSteamID.Nil;
+            if (string.IsNullOrEmpty(rawLobbyId) || rawLobbyId.Trim().Length == 0)
+                return false;
+
+            string raw = rawLobbyId.Trim();
+            ulong value;
+            if (ulong.TryParse(raw, out value) && value != 0UL)
+            {
+                lobbyId = new CSteamID(value);
+                return true;
+            }
+
+            var match = System.Text.RegularExpressions.Regex.Match(raw, @"Lobby ID:\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success && ulong.TryParse(match.Groups[1].Value, out value) && value != 0UL)
+            {
+                lobbyId = new CSteamID(value);
+                return true;
+            }
+
+            match = System.Text.RegularExpressions.Regex.Match(raw, @"\b(\d{8,})\b");
+            if (match.Success && ulong.TryParse(match.Groups[1].Value, out value) && value != 0UL)
+            {
+                lobbyId = new CSteamID(value);
+                return true;
+            }
+
+            return false;
+        }
+
+        string DescribeLobbyCreateFailure(EResult result, bool ioFail)
+        {
+            if (ioFail)
+                return "Steam could not create the lobby.\nCheck Steam and try again.";
+
+            switch (result)
+            {
+                case EResult.k_EResultNoConnection:
+                    return "Steam is offline.\nReconnect Steam and try again.";
+                case EResult.k_EResultTimeout:
+                    return "Steam timed out while creating the lobby.\nUse Retry Last.";
+                case EResult.k_EResultAccessDenied:
+                    return "Steam blocked lobby creation.\nCheck the overlay and privacy settings.";
+                default:
+                    return "Steam could not create the lobby (" + result + ").\nUse Retry Last or Host Game to try again.";
+            }
+        }
+
+        string DescribeLobbyJoinFailure(EChatRoomEnterResponse response, bool ioFail)
+        {
+            if (ioFail)
+                return "Steam could not join the lobby.\nCheck Steam and try again.";
+
+            switch (response)
+            {
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseDoesntExist:
+                    return "That Steam lobby no longer exists.\nAsk the host for a fresh invite.";
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseFull:
+                    return "That Steam lobby is already full.";
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseBanned:
+                    return "Steam reported that this account is blocked from the lobby.";
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseLimited:
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseCommunityBan:
+                    return "Steam account restrictions prevented the lobby join.";
+                case EChatRoomEnterResponse.k_EChatRoomEnterResponseNotAllowed:
+                    return "Steam blocked the lobby join.\nCheck your invite and privacy settings.";
+                default:
+                    return "Steam could not join the lobby (" + response + ").\nUse Retry Last or Join Game to try again.";
+            }
+        }
+
+        string DescribeP2PFailure(byte err)
+        {
+            switch ((EP2PSessionError)err)
+            {
+                case EP2PSessionError.k_EP2PSessionErrorTimeout:
+                    return "Steam P2P timed out while contacting the other player.";
+                case EP2PSessionError.k_EP2PSessionErrorNotRunningApp:
+                    return "The other player is not running Cuphead with the mod yet.";
+                case EP2PSessionError.k_EP2PSessionErrorNoRightsToApp:
+                    return "Steam denied the P2P session for this app.";
+                case EP2PSessionError.k_EP2PSessionErrorDestinationNotLoggedIn:
+                    return "The other player's Steam session went offline.";
+                case EP2PSessionError.k_EP2PSessionErrorMax:
+                    return "Steam P2P reported an unknown error.";
+                default:
+                    return "Steam P2P failed (" + err + ").";
+            }
         }
 
         void HandleSteamRuntimeFailure(string context, Exception ex)

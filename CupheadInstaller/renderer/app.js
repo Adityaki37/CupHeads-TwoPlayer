@@ -14,6 +14,7 @@ if (typeof installer === 'undefined') {
 let currentView  = 0;
 let cupheadPath  = null;
 let hasBepInEx   = false;
+let hasPlugin    = false;
 
 // ── Navigation ─────────────────────────────────────────────────────────────
 
@@ -61,8 +62,11 @@ document.getElementById('btn-start').addEventListener('click', () => goTo(1));
 async function onEnterDetect() {
   cupheadPath = null;
   hasBepInEx  = false;
+  hasPlugin   = false;
 
   setDetect('scanning');
+  setToolNote('', '');
+  updateUtilityButtons();
   disable('btn-d-next', true);
 
   try {
@@ -85,26 +89,64 @@ function setDetect(state) {
   set('badge-row',       state === 'found');
 }
 
+function setToolNote(kind, text) {
+  const el = document.getElementById('detect-tool-note');
+  if (!el) return;
+
+  if (!text) {
+    el.textContent = '';
+    el.className = 'tool-note hidden';
+    return;
+  }
+
+  el.textContent = text;
+  el.className = 'tool-note ' + (kind || 'info');
+}
+
+function reportGlobalError(text) {
+  const el = document.getElementById('global-error');
+  if (!el) return;
+  el.textContent = text;
+  el.style.display = text ? 'block' : 'none';
+}
+
+function updateUtilityButtons() {
+  const hasPath = !!cupheadPath;
+  disable('btn-open-folder', !hasPath);
+  disable('btn-verify', !hasPath);
+  disable('btn-done-open-folder', !hasPath);
+}
+
 async function applyPath(dir) {
   setDetect('found');
   document.getElementById('detect-path').textContent = dir;
 
   const s = await installer.checkInstallState(dir);
-  if (!s.valid) { setDetect('notfound'); return; }
+  if (!s.valid) {
+    cupheadPath = null;
+    hasBepInEx  = false;
+    hasPlugin   = false;
+    setDetect('notfound');
+    updateUtilityButtons();
+    disable('btn-d-next', true);
+    return;
+  }
 
   cupheadPath = dir;
-  hasBepInEx  = !!s.hasBepInEx;
+  hasBepInEx  = !!s.hasBepInExCore && !!s.hasDoorstop;
+  hasPlugin   = !!s.hasPlugin;
 
   // BepInEx badge
-  const bepOk = s.hasBepInEx;
+  const bepOk = hasBepInEx;
   badge('badge-bep', 'bdot-bep', 'bval-bep',
-        bepOk, bepOk ? 'Installed' : 'Not found');
+        bepOk, bepOk ? 'Installed' : (s.hasBepInEx ? 'Needs repair' : 'Not found'));
 
   // Plugin badge
-  const plugOk = s.hasPlugin;
+  const plugOk = hasPlugin;
   badge('badge-plug', 'bdot-plug', 'bval-plug',
         plugOk, plugOk ? 'Up to date' : 'Not installed');
 
+  updateUtilityButtons();
   disable('btn-d-next', false);
 }
 
@@ -127,6 +169,22 @@ document.getElementById('btn-change').addEventListener('click', async () => {
   const dir = await installer.browseFolder();
   if (!dir) return;
   await applyPath(dir);
+});
+
+document.getElementById('btn-open-folder').addEventListener('click', async () => {
+  const result = await installer.openFolder(cupheadPath);
+  setToolNote(result.ok ? 'ok' : 'error', result.message);
+});
+
+document.getElementById('btn-launch-steam').addEventListener('click', async () => {
+  const result = await installer.launchSteam();
+  setToolNote(result.ok ? 'ok' : 'warn', result.message);
+});
+
+document.getElementById('btn-verify').addEventListener('click', async () => {
+  const result = await installer.verifyInstall(cupheadPath);
+  if (cupheadPath) await applyPath(cupheadPath);
+  setToolNote(result.ok ? 'ok' : 'warn', result.message);
 });
 
 document.getElementById('btn-d-back').addEventListener('click', () => goTo(0, -1));
@@ -190,6 +248,14 @@ installer.onInstallProgress((data) => {
 // ── View 3 — Done ──────────────────────────────────────────────────────────
 
 document.getElementById('btn-done').addEventListener('click', () => installer.windowClose());
+document.getElementById('btn-done-open-folder').addEventListener('click', async () => {
+  const result = await installer.openFolder(cupheadPath);
+  reportGlobalError(result.ok ? '' : result.message);
+});
+document.getElementById('btn-done-launch-steam').addEventListener('click', async () => {
+  const result = await installer.launchSteam();
+  reportGlobalError(result.ok ? '' : result.message);
+});
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
