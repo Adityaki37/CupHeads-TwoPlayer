@@ -1,0 +1,113 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <AssemblyName>CupheadOnline</AssemblyName>
+    <RootNamespace>CupheadOnline</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>8</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Optimize>true</Optimize>
+    <!--
+      Set CUPHEAD_PATH to your Cuphead install directory, e.g.:
+        Windows (default Steam): C:\Program Files (x86)\Steam\steamapps\common\Cuphead
+      Or set the env-var before building:
+        $env:CUPHEAD_PATH = "D:\Games\Cuphead"
+    -->
+    <GameDir Condition="'$(CUPHEAD_PATH)' != ''">$(CUPHEAD_PATH)</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">H:\SteamLibrary\steamapps\common\Cuphead</GameDir>
+    <BepInExDir>$(GameDir)\BepInEx</BepInExDir>
+    <ManagedDir>$(GameDir)\Cuphead_Data\Managed</ManagedDir>
+  </PropertyGroup>
+
+  <!-- BCL assemblies — explicit so net35 SDK finds the game's copies -->
+  <ItemGroup>
+    <Reference Include="System">
+      <HintPath>$(ManagedDir)\System.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Core">
+      <HintPath>$(ManagedDir)\System.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- BepInEx / Harmony – do not copy into plugin folder (already in BepInEx\core) -->
+  <ItemGroup>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExDir)\core\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExDir)\core\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MonoMod.RuntimeDetour">
+      <HintPath>$(BepInExDir)\core\MonoMod.RuntimeDetour.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Unity engine assemblies – do not copy (already in game) -->
+  <ItemGroup>
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-firstpass">
+      <HintPath>$(ManagedDir)\Assembly-CSharp-firstpass.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(ManagedDir)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(ManagedDir)\UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Game assembly – do not copy -->
+  <ItemGroup>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(ManagedDir)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- Post-build: copy output DLL into BepInEx plugin folder -->
+  <Target Name="DeployPlugin" AfterTargets="Build">
+    <PropertyGroup>
+      <PluginDir>$(BepInExDir)\plugins\CupheadOnline</PluginDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(PluginDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(PluginDir)" />
+    <Message Text="Deployed to $(PluginDir)" Importance="high" />
+  </Target>
+
+</Project>

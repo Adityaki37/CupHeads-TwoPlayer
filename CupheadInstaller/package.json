@@ -1,0 +1,38 @@
+{
+  "name": "cuphead-online-installer",
+  "version": "1.0.0",
+  "description": "Installer for the CupheadOnline multiplayer mod",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "predist": "node scripts/copy-dll.js",
+    "dist": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.cupheadonline.installer",
+    "productName": "CupheadOnline Installer",
+    "win": {
+      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "icon": "assets/cupheads.ico"
+    },
+    "extraResources": [
+      { "from": "assets/CupheadOnline.dll", "to": "CupheadOnline.dll" }
+    ],
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**",
+      "node_modules/**"
+    ],
+    "portable": {
+      "artifactName": "CupheadOnline-Installer.exe"
+    }
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10"
+  },
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
+  }
+}

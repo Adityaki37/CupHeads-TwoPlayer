@@ -1,0 +1,38 @@
+# Visual Studio / .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vs/
+
+# Node / Electron
+node_modules/
+dist/
+**/dist/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Build artifacts
+*.exe
+*.dll
+*.pdb
+*.cache
+*.zip

@@ -1,0 +1,93 @@
+using UnityEngine;
+using CupheadOnline.Net;
+
+namespace CupheadOnline.Sync
+{
+    /// <summary>
+    /// Applies weapon events received from the network onto the remote player's
+    /// weapon manager, so the correct visual / audio effects play locally.
+    ///
+    /// We intentionally do NOT spawn actual projectiles on the client for the remote
+    /// player — the host's projectiles are replicated via EnemySyncManager's enemy-state
+    /// logic, and the visual muzzle flash / animation is driven here.
+    ///
+    /// Rationale: spawning physics-enabled projectiles on both sides would double-count
+    /// damage. The host is the only source of truth for collision.
+    /// </summary>
+    public static class RemoteWeaponReplicator
+    {
+        public static void Apply(WeaponEventPacket pkt)
+        {
+            var player = PlayerManager.GetPlayer((PlayerId)pkt.PlayerId) as LevelPlayerController;
+            if (player == null) return;
+
+            // Set look direction so the muzzle flash appears in the right direction
+            if (player.motor != null)
+            {
+                var t = HarmonyLib.Traverse.Create(player.motor);
+                var dir = new Trilean2(pkt.AimX, pkt.AimY);
+                t.Property("LookDirection").SetValue(dir);
+                t.Property("TrueLookDirection").SetValue(dir);
+            }
+
+            var wm = player.weaponManager;
+            if (wm == null) return;
+
+            switch (pkt.EventType)
+            {
+                case 0: // Basic shot
+                    // Raise the OnWeaponFire event so the animation controller plays the fire anim
+                    TriggerAnimatorParam(player, "Shooting", true);
+                    break;
+
+                case 1: // EX
+                    TriggerAnimatorTrigger(player, "Ex");
+                    break;
+
+                case 2: // Super
+                    TriggerAnimatorTrigger(player, "Super");
+                    break;
+
+                case 3: // Parry
+                    TriggerAnimatorTrigger(player, "Parry");
+                    break;
+
+                case 4: // Weapon switch — update active weapon on remote manager
+                    ApplyWeaponSwitch(wm, pkt.WeaponId);
+                    break;
+            }
+        }
+
+        static void TriggerAnimatorParam(LevelPlayerController player, string param, bool value)
+        {
+            var anim = player.animationController?.animator;
+            if (anim == null) return;
+            anim.SetBool(param, value);
+        }
+
+        static void TriggerAnimatorTrigger(LevelPlayerController player, string trigger)
+        {
+            var anim = player.animationController?.animator;
+            if (anim == null) return;
+            anim.SetTrigger(trigger);
+        }
+
+        static void ApplyWeaponSwitch(LevelPlayerWeaponManager wm, byte weaponId)
+        {
+            // The weapon enum value was sent — try to switch to that weapon
+            try
+            {
+                var weapon = (Weapon)weaponId;
+                // Call SwitchWeapon via reflection since it's likely private
+                var mi = typeof(LevelPlayerWeaponManager).GetMethod(
+                    "SwitchWeapon",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                mi?.Invoke(wm, new object[] { weapon });
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogWarning($"[WeaponReplicator] Weapon switch failed: {ex.Message}");
+            }
+        }
+    }
+}
