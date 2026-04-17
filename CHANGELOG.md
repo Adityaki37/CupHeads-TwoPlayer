@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.3 - 2026-04-17
+
+- Added a host-led `OPEN SAVE SLOT` flow so the multiplayer connection can stay alive while the host returns to Cuphead's normal save selection screen.
+- Added save-slot and non-level scene sync so the guest follows the host into the chosen map or intro flow more reliably.
+- Added a `COPY LOBBY ID` action in the multiplayer menu and automatically copy the lobby ID to the clipboard when a host lobby is created.
+- Added a live title-screen footer that shows the mod version and whether the session is connected, waiting in lobby, or ready for the host to press `Start`.
+- Upgraded the in-game connection HUD to show host/client role, peer context, lobby shorthand, and session elapsed time alongside ping quality.
+
 ## v1.0.2 - 2026-04-17
 
 - Fixed the multiplayer submenu back behavior so `BACK`, `Escape`, and controller `B` cleanly return to the main menu instead of appearing to refresh the submenu.

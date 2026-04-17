@@ -4,13 +4,18 @@ using CupheadOnline.Sync;
 
 namespace CupheadOnline.Patches
 {
-    /// <summary>
-    /// Intercepts scene transitions so the host can drag the client into the same level.
-    /// Also resets per-level sync state on both sides.
-    ///
-    /// SceneLoader.LoadLevel(Levels, Transition, ...) is the game's level-load API.
-    /// Patching this is sufficient since all level transitions go through it.
-    /// </summary>
+    internal static class SceneSyncState
+    {
+        internal static bool SuppressMenuSceneBroadcast;
+
+        internal static void ResetTransientSyncState()
+        {
+            EnemySyncManager.Reset();
+            EnemyRegistry.Clear();
+            RemotePlayer.Reset();
+        }
+    }
+
     [HarmonyPatch(typeof(SceneLoader), "LoadLevel",
         typeof(Levels), typeof(SceneLoader.Transition), typeof(SceneLoader.Icon), typeof(SceneLoader.Context))]
     public static class SceneLoaderLevelsPatch
@@ -19,12 +24,11 @@ namespace CupheadOnline.Patches
         {
             if (!MultiplayerSession.IsActive) return;
 
-            // Reset per-level systems before new scene loads
-            EnemySyncManager.Reset();
-            EnemyRegistry.Clear();
-            RemotePlayer.Reset();
+            SceneSyncState.ResetTransientSyncState();
 
-            if (!MultiplayerSession.IsHost) return; // only host drives scene changes
+            if (!MultiplayerSession.IsHost) return;
+
+            SceneSyncState.SuppressMenuSceneBroadcast = true;
 
             var pkt = new SceneChangePacket
             {
@@ -32,6 +36,40 @@ namespace CupheadOnline.Patches
                 RngSeed   = RngSync.NextSeed(),
             };
             Plugin.Net.SendSceneChange(ref pkt);
+        }
+
+        static void Postfix()
+        {
+            SceneSyncState.SuppressMenuSceneBroadcast = false;
+        }
+    }
+
+    [HarmonyPatch(typeof(SceneLoader), "LoadScene",
+        typeof(Scenes), typeof(SceneLoader.Transition), typeof(SceneLoader.Transition), typeof(SceneLoader.Icon), typeof(SceneLoader.Context))]
+    public static class SceneLoaderScenesPatch
+    {
+        static void Prefix(
+            Scenes scene,
+            SceneLoader.Transition transitionStart,
+            SceneLoader.Transition transitionEnd,
+            SceneLoader.Icon icon)
+        {
+            if (!MultiplayerSession.IsActive) return;
+
+            SceneSyncState.ResetTransientSyncState();
+
+            if (!MultiplayerSession.IsHost) return;
+            if (SceneSyncState.SuppressMenuSceneBroadcast) return;
+
+            var pkt = new MenuSceneChangePacket
+            {
+                SceneEnum       = (int)scene,
+                TransitionStart = (byte)transitionStart,
+                TransitionEnd   = (byte)transitionEnd,
+                Icon            = (byte)icon,
+                RngSeed         = RngSync.NextSeed(),
+            };
+            Plugin.Net.SendMenuSceneChange(ref pkt);
         }
     }
 }

@@ -4,8 +4,7 @@ using UnityEngine.UI;
 namespace CupheadOnline.UI
 {
     /// <summary>
-    /// Minimal in-game overlay: connection status and ping.
-    /// Top-right corner, standard UnityEngine.UI.Text (no TMPro required).
+    /// Lightweight in-game overlay: status, ping quality, and a little session context.
     /// </summary>
     public class ConnectionHUD : MonoBehaviour
     {
@@ -16,18 +15,20 @@ namespace CupheadOnline.UI
         private static readonly Color PoorColour         = new Color(1.00f, 0.55f, 0.10f, 1f);
         private static readonly Color DisconnectedColour = new Color(0.90f, 0.20f, 0.15f, 1f);
         private static readonly Color TextColour         = new Color(0.96f, 0.91f, 0.77f, 1f);
+        private static readonly Color MetaColour         = new Color(0.82f, 0.78f, 0.66f, 0.95f);
         private static readonly Color BgGoodColour       = new Color(0.05f, 0.03f, 0.02f, 0.82f);
         private static readonly Color BgOkayColour       = new Color(0.18f, 0.12f, 0.03f, 0.86f);
         private static readonly Color BgPoorColour       = new Color(0.28f, 0.09f, 0.02f, 0.88f);
 
-        private Text  _titleLabel;
-        private Text  _pingLabel;
-        private Text  _statusLabel;
+        private Text _titleLabel;
+        private Text _pingLabel;
+        private Text _statusLabel;
+        private Text _metaLabel;
         private Image _bgImage;
 
-        // ──────────────────────────────────────────────────────────────────────
-        //  Show / hide / update
-        // ──────────────────────────────────────────────────────────────────────
+        private float _connectedAt = -1f;
+        private bool _trackingConnectedSession;
+        private bool _showingDisconnectedState;
 
         public static void Show()
         {
@@ -36,7 +37,9 @@ namespace CupheadOnline.UI
                 Hide();
                 return;
             }
+
             if (Instance != null) return;
+
             var go = new GameObject("CupheadOnline_HUD");
             DontDestroyOnLoad(go);
             Instance = go.AddComponent<ConnectionHUD>();
@@ -49,6 +52,7 @@ namespace CupheadOnline.UI
                 Hide();
                 return;
             }
+
             Show();
             if (Instance != null)
                 Instance.SetConnectedStatus(status);
@@ -68,6 +72,7 @@ namespace CupheadOnline.UI
                 Hide();
                 return;
             }
+
             Show();
             if (Instance != null)
                 Instance.ApplyPing(ms);
@@ -80,59 +85,81 @@ namespace CupheadOnline.UI
                 Hide();
                 return;
             }
+
             Show();
             if (Instance != null)
                 Instance.ApplyDisconnected(reason);
         }
 
-        // ──────────────────────────────────────────────────────────────────────
-        //  Build
-        // ──────────────────────────────────────────────────────────────────────
-
         void Awake()
         {
             var canvas = gameObject.AddComponent<Canvas>();
-            canvas.renderMode   = RenderMode.ScreenSpaceOverlay;
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 150;
+
             var scaler = gameObject.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode        = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920, 1080);
+
             gameObject.AddComponent<GraphicRaycaster>();
 
-            // Background pill — top-right corner
-            var bg   = new GameObject("HUD_BG");
+            var bg = new GameObject("HUD_BG");
             bg.transform.SetParent(gameObject.transform, false);
             var bgRT = bg.AddComponent<RectTransform>();
             bgRT.anchorMin = bgRT.anchorMax = new Vector2(1f, 1f);
-            bgRT.pivot     = new Vector2(1f, 1f);
+            bgRT.pivot = new Vector2(1f, 1f);
             bgRT.anchoredPosition = new Vector2(-12f, -12f);
-            bgRT.sizeDelta = new Vector2(270f, 78f);
-            _bgImage       = bg.AddComponent<Image>();
+            bgRT.sizeDelta = new Vector2(292f, 96f);
+            _bgImage = bg.AddComponent<Image>();
             _bgImage.color = BgGoodColour;
 
-            _titleLabel = MakeLabel(bg, "CUPHEAD ONLINE", 13, OkayColour, new Vector2(0, 20), new Vector2(250f, 20f));
+            _titleLabel = MakeLabel(bg, "CUPHEAD ONLINE", 13, OkayColour, new Vector2(0f, 26f), new Vector2(270f, 20f));
+            _pingLabel = MakeLabel(bg, "PING ---", 13, OkayColour, new Vector2(0f, 6f), new Vector2(270f, 20f));
 
-            _pingLabel   = MakeLabel(bg, "PING ---", 13, OkayColour, new Vector2(0, 0), new Vector2(250f, 20f));
-
-            _statusLabel = MakeLabel(bg, "Waiting for peer...", 10, TextColour, new Vector2(0, -22), new Vector2(250f, 28f));
+            _statusLabel = MakeLabel(bg, "Waiting for peer...", 10, TextColour, new Vector2(0f, -16f), new Vector2(270f, 24f));
             _statusLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
             _statusLabel.verticalOverflow = VerticalWrapMode.Overflow;
+
+            _metaLabel = MakeLabel(bg, "", 9, MetaColour, new Vector2(0f, -38f), new Vector2(270f, 18f));
         }
 
-        void OnDestroy() { if (Instance == this) Instance = null; }
+        void Update()
+        {
+            RefreshMeta();
+        }
+
+        void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+        }
 
         void SetConnectedStatus(string status)
         {
-            if (_titleLabel != null) _titleLabel.color = OkayColour;
+            if (!_trackingConnectedSession)
+                _connectedAt = Time.unscaledTime;
+
+            _trackingConnectedSession = true;
+            _showingDisconnectedState = false;
+
+            if (_titleLabel != null)
+            {
+                _titleLabel.text = "CUPHEAD ONLINE";
+                _titleLabel.color = OkayColour;
+            }
+
             if (_pingLabel != null && string.IsNullOrEmpty(_pingLabel.text))
                 _pingLabel.text = "PING ---";
+
             if (_statusLabel != null)
             {
                 _statusLabel.text = string.IsNullOrEmpty(status) ? "Steam P2P connected." : status;
                 _statusLabel.color = TextColour;
             }
+
             if (_bgImage != null)
                 _bgImage.color = BgGoodColour;
+
+            RefreshMeta();
         }
 
         void ApplyPing(int ms)
@@ -160,53 +187,152 @@ namespace CupheadOnline.UI
                 bg = BgPoorColour;
             }
 
-            if (_titleLabel != null) _titleLabel.color = accent;
+            if (_titleLabel != null)
+                _titleLabel.color = accent;
+
             if (_pingLabel != null)
             {
-                _pingLabel.text  = $"PING {ms}ms - {quality}";
+                _pingLabel.text = "PING " + ms + "ms - " + quality;
                 _pingLabel.color = accent;
             }
+
             if (_statusLabel != null && string.IsNullOrEmpty(_statusLabel.text))
                 _statusLabel.text = "Steam P2P connected.";
+
             if (_bgImage != null)
                 _bgImage.color = bg;
+
+            RefreshMeta();
         }
 
         void ApplyDisconnected(string reason)
         {
+            _trackingConnectedSession = false;
+            _showingDisconnectedState = true;
+            _connectedAt = -1f;
+
             if (_titleLabel != null)
             {
                 _titleLabel.text = "CUPHEAD ONLINE";
                 _titleLabel.color = DisconnectedColour;
             }
+
             if (_pingLabel != null)
             {
                 _pingLabel.text = "DISCONNECTED";
                 _pingLabel.color = DisconnectedColour;
             }
+
             if (_statusLabel != null)
             {
                 _statusLabel.text = string.IsNullOrEmpty(reason) ? "Connection closed." : reason;
                 _statusLabel.color = new Color(1f, 0.78f, 0.72f, 1f);
             }
+
             if (_bgImage != null)
                 _bgImage.color = new Color(0.30f, 0.04f, 0.02f, 0.90f);
+
+            RefreshMeta();
+        }
+
+        void RefreshMeta()
+        {
+            if (_metaLabel == null) return;
+
+            if (_showingDisconnectedState)
+            {
+                string retryHint = "Open Multiplayer to retry.";
+                if (_metaLabel.text != retryHint)
+                    _metaLabel.text = retryHint;
+                _metaLabel.color = new Color(1f, 0.74f, 0.66f, 0.92f);
+                return;
+            }
+
+            if (Plugin.Net == null)
+            {
+                if (!string.IsNullOrEmpty(_metaLabel.text))
+                    _metaLabel.text = string.Empty;
+                return;
+            }
+
+            if (Plugin.Net.IsConnected)
+            {
+                if (_connectedAt < 0f)
+                    _connectedAt = Time.unscaledTime;
+
+                string line = (Plugin.Net.IsHost ? "HOST" : "CLIENT")
+                    + " | "
+                    + ShortenPeerName(Plugin.Net.CurrentPeerName);
+
+                string lobbyId = ShortLobbyId(Plugin.Net.CurrentLobbyId);
+                if (!string.IsNullOrEmpty(lobbyId))
+                    line += " | #" + lobbyId;
+
+                line += " | " + FormatElapsed(Time.unscaledTime - _connectedAt);
+
+                if (_metaLabel.text != line)
+                    _metaLabel.text = line;
+                _metaLabel.color = MetaColour;
+                return;
+            }
+
+            if (Plugin.Net.IsInLobby)
+            {
+                string lobbyLine = Plugin.Net.IsHost ? "HOST LOBBY" : "IN LOBBY";
+                string lobbyId = ShortLobbyId(Plugin.Net.CurrentLobbyId);
+                if (!string.IsNullOrEmpty(lobbyId))
+                    lobbyLine += " | #" + lobbyId;
+
+                if (_metaLabel.text != lobbyLine)
+                    _metaLabel.text = lobbyLine;
+                _metaLabel.color = MetaColour;
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(_metaLabel.text))
+                _metaLabel.text = string.Empty;
+        }
+
+        static string ShortenPeerName(string name)
+        {
+            if (string.IsNullOrEmpty(name) || name == "Unknown Player")
+                return "Peer";
+
+            return name.Length <= 14 ? name : name.Substring(0, 13) + "...";
+        }
+
+        static string ShortLobbyId(string lobbyId)
+        {
+            if (string.IsNullOrEmpty(lobbyId))
+                return string.Empty;
+
+            return lobbyId.Length <= 8 ? lobbyId : lobbyId.Substring(lobbyId.Length - 8);
+        }
+
+        static string FormatElapsed(float seconds)
+        {
+            int totalSeconds = Mathf.Max(0, Mathf.FloorToInt(seconds));
+            int minutes = totalSeconds / 60;
+            int secs = totalSeconds % 60;
+            return minutes.ToString("00") + ":" + secs.ToString("00");
         }
 
         static Text MakeLabel(GameObject parent, string text, int size, Color colour, Vector2 offset, Vector2 sizeDelta)
         {
             var go = new GameObject("L_" + text);
             go.transform.SetParent(parent.transform, false);
+
             var rt = go.AddComponent<RectTransform>();
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
             rt.anchoredPosition = offset;
             rt.sizeDelta = sizeDelta;
+
             var t = go.AddComponent<Text>();
-            t.text      = text;
-            t.fontSize  = size;
-            t.color     = colour;
+            t.text = text;
+            t.fontSize = size;
+            t.color = colour;
             t.alignment = TextAnchor.MiddleCenter;
-            t.font      = Resources.GetBuiltinResource<Font>("Arial.ttf");
+            t.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
             return t;
         }
     }

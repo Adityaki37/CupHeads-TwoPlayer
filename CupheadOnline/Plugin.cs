@@ -107,6 +107,8 @@ namespace CupheadOnline
 
             // Scene transitions
             PatchSafe(harmony, typeof(SceneLoaderLevelsPatch));
+            PatchSafe(harmony, typeof(SceneLoaderScenesPatch));
+            PatchSafe(harmony, typeof(SlotSelectEnterGamePatch));
 
             Log.LogInfo("[Plugin] Patch pass complete.");
         }
@@ -171,6 +173,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupheadOnline";
-        public const string VERSION = "1.0.2";
+        public const string VERSION = "1.0.3";
     }
 }

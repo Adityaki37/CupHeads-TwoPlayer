@@ -40,8 +40,9 @@ namespace CupheadOnline.Patches
         internal const int JoinIndex       = 1;
         internal const int InviteIndex     = 2;
         internal const int RetryIndex      = 3;
-        internal const int DiagnosticsIndex= 4;
-        internal const int BackIndex       = 5;
+        internal const int CopyLobbyIndex  = 4;
+        internal const int DiagnosticsIndex= 5;
+        internal const int BackIndex       = 6;
 
         internal static bool             InMpMenu;
         internal static int              MpSelection;
@@ -60,6 +61,7 @@ namespace CupheadOnline.Patches
         internal static Text             PresenceText;
         internal static Text             HintText;
         internal static Text             BackHintText;
+        internal static Text             MainFooterText;
         internal static SlotSelectScreen ScreenInstance;
 
         // Status animation
@@ -78,10 +80,17 @@ namespace CupheadOnline.Patches
             typeof(SlotSelectScreen).GetField("_mainMenuSelection", BF);
         internal static readonly FieldInfo TimeSinceStartField =
             typeof(SlotSelectScreen).GetField("timeSinceStart", BF);
+        internal static readonly FieldInfo SlotSelectionField =
+            typeof(SlotSelectScreen).GetField("_slotSelection", BF);
+        internal static readonly FieldInfo SlotsField =
+            typeof(SlotSelectScreen).GetField("slots", BF);
         internal static readonly FieldInfo SelectedColorField =
             typeof(SlotSelectScreen).GetField("mainMenuSelectedColor", BF);
         internal static readonly FieldInfo UnselectedColorField =
             typeof(SlotSelectScreen).GetField("mainMenuUnselectedColor", BF);
+        internal static readonly MethodInfo SetStateMethod =
+            typeof(SlotSelectScreen).GetMethod("SetState",
+                BF, null, new[] { typeof(SlotSelectScreen.State) }, null);
         internal static readonly MethodInfo GetButtonDownMethod =
             typeof(SlotSelectScreen).GetMethod("GetButtonDown",
                 BF, null, new[] { typeof(CupheadButton) }, null);
@@ -104,6 +113,7 @@ namespace CupheadOnline.Patches
             PresenceText   = null;
             HintText       = null;
             BackHintText   = null;
+            MainFooterText = null;
             ScreenInstance = null;
             StatusBase     = "";
             StatusAnimate  = false;
@@ -211,6 +221,7 @@ namespace CupheadOnline.Patches
             var joinGO     = CloneItem(exitGO, mpLayout, "JOIN GAME");
             var inviteGO   = CloneItem(exitGO, mpLayout, "INVITE FRIEND");
             var retryGO    = CloneItem(exitGO, mpLayout, "RETRY LAST");
+            var copyLobbyGO= CloneItem(exitGO, mpLayout, "COPY LOBBY ID");
             var diagGO     = CloneItem(exitGO, mpLayout, "COPY DIAGNOSTICS");
             var backGO     = CloneItem(exitGO, mpLayout, "BACK");
 
@@ -220,6 +231,7 @@ namespace CupheadOnline.Patches
                 joinGO.GetComponent<Text>(),
                 inviteGO.GetComponent<Text>(),
                 retryGO.GetComponent<Text>(),
+                copyLobbyGO.GetComponent<Text>(),
                 diagGO.GetComponent<Text>(),
                 backGO.GetComponent<Text>(),
             };
@@ -262,6 +274,23 @@ namespace CupheadOnline.Patches
             MpMenuState.BackHintText = mpBackHintGO.GetComponent<Text>();
             if (MpMenuState.BackHintText != null)
                 MpMenuState.BackHintText.text = "[ Press Escape or Controller B to go back ]";
+            var footerGO = BuildText(MpMenuState.MainContainer, "MainFooterText",
+                Vector2.zero, new Vector2(820f, 24f),
+                sample.font, Mathf.Max(11, sample.fontSize - 8),
+                new Color(0.74f, 0.74f, 0.70f, 0.88f));
+            var footerRT = footerGO.GetComponent<RectTransform>();
+            if (footerRT != null)
+            {
+                footerRT.anchorMin = footerRT.anchorMax = new Vector2(0f, 0f);
+                footerRT.pivot = new Vector2(0f, 0f);
+                footerRT.anchoredPosition = new Vector2(18f, 18f);
+            }
+            MpMenuState.MainFooterText = footerGO.GetComponent<Text>();
+            if (MpMenuState.MainFooterText != null)
+            {
+                MpMenuState.MainFooterText.alignment = TextAnchor.MiddleLeft;
+                MpMenuState.MainFooterText.text = "CupheadOnline v" + PluginInfo.VERSION;
+            }
 
             // ── Build CreditsPanel ────────────────────────────────────────────
             var credRoot = BuildPanel("CreditsPanel", containerParent,
@@ -694,6 +723,7 @@ namespace CupheadOnline.Patches
             }
 
             if (LobbyScreen.Instance != null) return;
+            UpdateMainFooterText();
 
             var ef = MpMenuState.EnumItemsField;
             var sf = MpMenuState.SelectionField;
@@ -708,6 +738,38 @@ namespace CupheadOnline.Patches
                 EnterMpMenu(__instance);
             else if (sentinel == 100 && MpMenuState.Btn(__instance, CupheadButton.Accept))
                 EnterCredits(__instance);
+        }
+
+        static void UpdateMainFooterText()
+        {
+            if (MpMenuState.MainFooterText == null) return;
+
+            string footer = "CupheadOnline v" + PluginInfo.VERSION;
+            if (Plugin.Net == null)
+            {
+                MpMenuState.MainFooterText.text = footer;
+                return;
+            }
+
+            if (Plugin.Net.IsConnected)
+            {
+                footer += Plugin.Net.IsHost
+                    ? "  |  Guest connected - press Start to choose a save"
+                    : "  |  Connected - waiting for host save";
+            }
+            else if (Plugin.Net.IsInLobby)
+            {
+                footer += Plugin.Net.IsHost
+                    ? "  |  Lobby ready - invite or share the lobby ID"
+                    : "  |  Lobby joined - finishing connection";
+            }
+            else if (!Plugin.Net.IsSteamReady)
+            {
+                footer += "  |  Steam unavailable outside Steam";
+            }
+
+            if (MpMenuState.MainFooterText.text != footer)
+                MpMenuState.MainFooterText.text = footer;
         }
 
         // ── Credits ──────────────────────────────────────────────────────────
@@ -808,18 +870,26 @@ namespace CupheadOnline.Patches
             string clipboardRaw;
             string clipboardLobbyId;
 
-            SetMpItemLabel(MpMenuState.HostIndex, "HOST GAME");
+            SetMpItemLabel(
+                MpMenuState.HostIndex,
+                Plugin.Net.IsConnected
+                    ? (Plugin.Net.IsHost ? "OPEN SAVE SLOT" : "WAIT FOR HOST")
+                    : "HOST GAME");
             SetMpItemLabel(
                 MpMenuState.JoinIndex,
-                _joinOverlayReady
-                    ? "OPEN FRIENDS"
-                    : TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId)
-                        ? "JOIN CLIPBOARD"
-                        : "JOIN GAME");
+                Plugin.Net.IsConnected
+                    ? (Plugin.Net.IsHost ? "GUEST CONNECTED" : "CONNECTED")
+                    : _joinOverlayReady
+                        ? "OPEN FRIENDS"
+                        : TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId)
+                            ? "JOIN CLIPBOARD"
+                            : "JOIN GAME");
             SetMpItemLabel(MpMenuState.InviteIndex, "INVITE FRIEND");
             SetMpItemLabel(MpMenuState.RetryIndex, Plugin.Net.GetRetryActionLabel());
+            SetMpItemLabel(MpMenuState.CopyLobbyIndex, "COPY LOBBY ID");
             SetMpItemLabel(MpMenuState.DiagnosticsIndex, "COPY DIAGNOSTICS");
-            SetMpItemLabel(MpMenuState.BackIndex, "BACK");
+            SetMpItemLabel(MpMenuState.BackIndex,
+                Plugin.Net.IsConnected || Plugin.Net.IsInLobby ? "DISCONNECT" : "BACK");
         }
 
         static void UpdateSteamBadge()
@@ -860,11 +930,21 @@ namespace CupheadOnline.Patches
             switch (MpMenuState.MpSelection)
             {
                 case MpMenuState.HostIndex:
+                    if (Plugin.Net.IsConnected)
+                    {
+                        return Plugin.Net.IsHost
+                            ? "Open Cuphead's normal save slots and choose the file you want to play together."
+                            : "Connected. Wait for the host to choose a save slot.";
+                    }
                     if (Plugin.Net.IsConnected || Plugin.Net.IsInLobby)
                         return "Leave the current session before starting a fresh host lobby.";
                     return "Create a friends-only Steam lobby for one guest.";
 
                 case MpMenuState.JoinIndex:
+                    if (Plugin.Net.IsConnected)
+                        return Plugin.Net.IsHost
+                            ? "Your guest is connected. Use OPEN SAVE SLOT when you are ready."
+                            : "Stay here while the host opens a save slot.";
                     if (_joinOverlayReady)
                         return "Open Steam Friends and wait for the host invite.";
                     if (TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId))
@@ -883,12 +963,17 @@ namespace CupheadOnline.Patches
                         ? "Retry the last host or join action without leaving the menu."
                         : "Becomes available after a host or join attempt.";
 
+                case MpMenuState.CopyLobbyIndex:
+                    return Plugin.Net.CanCopyLobbyId
+                        ? "Copy the current Steam lobby ID so someone can join from the clipboard."
+                        : "Available once a lobby exists.";
+
                 case MpMenuState.DiagnosticsIndex:
                     return "Copy version, Steam status, lobby info, ping, and the last error for bug reports.";
 
                 default:
                     return Plugin.Net.IsConnected || Plugin.Net.IsInLobby
-                        ? "Leave the current Steam session and return to the main menu."
+                        ? "Disconnect the current Steam session and return to the main menu."
                         : "Return to the main menu.";
             }
         }
@@ -904,12 +989,16 @@ namespace CupheadOnline.Patches
             switch (index)
             {
                 case MpMenuState.HostIndex:
+                    if (Plugin.Net.IsConnected)
+                        return Plugin.Net.IsHost;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
                         && !Plugin.Net.IsInLobby;
 
                 case MpMenuState.JoinIndex:
+                    if (Plugin.Net.IsConnected)
+                        return false;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
@@ -923,6 +1012,9 @@ namespace CupheadOnline.Patches
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
                         && Plugin.Net.CanRetryLastAction;
+
+                case MpMenuState.CopyLobbyIndex:
+                    return Plugin.Net.CanCopyLobbyId;
 
                 case MpMenuState.DiagnosticsIndex:
                 case MpMenuState.BackIndex:
@@ -1019,11 +1111,20 @@ namespace CupheadOnline.Patches
                 {
                     case MpMenuState.HostIndex:
                         if (IsItemAvailable(MpMenuState.HostIndex))
-                            OnHostGame();
+                        {
+                            if (Plugin.Net.IsConnected && Plugin.Net.IsHost)
+                                OpenHostSaveSelect(inst);
+                            else
+                                OnHostGame();
+                        }
                         else
                             MpMenuState.SetStatus(
-                                Plugin.Net.IsConnected || Plugin.Net.IsInLobby
-                                    ? "Leave the current session before hosting again."
+                                Plugin.Net.IsConnected
+                                    ? (Plugin.Net.IsHost
+                                        ? "Open the save slots when you are ready."
+                                        : "Waiting for the host to choose a save slot.")
+                                    : Plugin.Net.IsInLobby
+                                        ? "Leave the current session before hosting again."
                                     : "Steam is still busy. Please wait.",
                                 animate: false);
                         break;
@@ -1052,6 +1153,10 @@ namespace CupheadOnline.Patches
 
                     case MpMenuState.RetryIndex:
                         OnRetryLast();
+                        break;
+
+                    case MpMenuState.CopyLobbyIndex:
+                        OnCopyLobbyId();
                         break;
 
                     case MpMenuState.DiagnosticsIndex:
@@ -1084,7 +1189,11 @@ namespace CupheadOnline.Patches
             StopTrackedCoroutine(MpMenuState.ScreenInstance, ref _mpFadeRoutine);
             StopTrackedCoroutine(MpMenuState.ScreenInstance, ref _dotsRoutine);
             MpMenuState.SetStatus(
-                Plugin.Net.IsSteamReady ? "Select an option." : Plugin.Net.SteamUnavailableStatus,
+                Plugin.Net.IsConnected
+                    ? (Plugin.Net.IsHost
+                        ? "Guest connected.\nSelect OPEN SAVE SLOT to choose a file."
+                        : "Connected.\nWaiting for the host to choose a save slot.")
+                    : Plugin.Net.IsSteamReady ? "Select an option." : Plugin.Net.SteamUnavailableStatus,
                 animate: false);
             if (MpMenuState.PresenceText != null) MpMenuState.PresenceText.text = "";
             UpdateDynamicMenuLabels();
@@ -1104,7 +1213,11 @@ namespace CupheadOnline.Patches
             Plugin.Log.LogInfo("[Menu] Entered MP menu.");
         }
 
-        static void ExitMpMenu(SlotSelectScreen inst)
+        static void ExitMpMenu(
+            SlotSelectScreen inst,
+            bool preserveConnection = false,
+            bool restoreMainMenuSelection = true,
+            bool showMainMenu = true)
         {
             MpMenuState.InMpMenu    = false;
             MpMenuState.InputLocked = false;
@@ -1120,17 +1233,61 @@ namespace CupheadOnline.Patches
             else
                 SetCanvasVisible(MpMenuState.MpCanvasGroup, MpMenuState.MpContainer, false);
 
-            if (MpMenuState.MainContainer != null) MpMenuState.MainContainer.SetActive(true);
+            if (MpMenuState.MainContainer != null)
+                MpMenuState.MainContainer.SetActive(showMainMenu);
 
-            var sf   = MpMenuState.SelectionField;
-            if (sf != null)
+            var sf = MpMenuState.SelectionField;
+            if (restoreMainMenuSelection && sf != null)
                 sf.SetValue(inst, MpMenuState.MainMenuMpIndex >= 0
                     ? MpMenuState.MainMenuMpIndex
                     : MpMenuState.SavedMainSel);
 
             LobbyScreen.Hide();
-            Plugin.Net.Shutdown();
+            if (!preserveConnection)
+                Plugin.Net.Shutdown();
             Plugin.Log.LogInfo("[Menu] Exited MP menu.");
+        }
+
+        static void OpenHostSaveSelect(SlotSelectScreen inst)
+        {
+            if (!Plugin.Net.CanOpenSaveSlot)
+            {
+                MpMenuState.SetStatus("Connect a guest before opening the save slots.", animate: false);
+                return;
+            }
+
+            ExitMpMenu(inst, preserveConnection: true, restoreMainMenuSelection: false, showMainMenu: false);
+
+            try
+            {
+                int slotSelection = Mathf.Clamp(PlayerData.CurrentSaveFileIndex, 0, 2);
+                if (MpMenuState.SlotSelectionField != null)
+                    MpMenuState.SlotSelectionField.SetValue(inst, slotSelection);
+
+                if (MpMenuState.SetStateMethod != null)
+                    MpMenuState.SetStateMethod.Invoke(inst, new object[] { SlotSelectScreen.State.SlotSelect });
+
+                var slots = MpMenuState.SlotsField != null
+                    ? MpMenuState.SlotsField.GetValue(inst) as SlotSelectScreenSlot[]
+                    : null;
+                if (slots != null)
+                {
+                    for (int i = 0; i < slots.Length; i++)
+                    {
+                        if (slots[i] != null)
+                            slots[i].Init(i);
+                    }
+                }
+
+                Plugin.Log.LogInfo("[Menu] Host opened save slot select.");
+            }
+            catch (System.Exception ex)
+            {
+                Plugin.Log.LogWarning("[Menu] Failed to open save slot select: " + ex.Message);
+                if (MpMenuState.MainContainer != null)
+                    MpMenuState.MainContainer.SetActive(true);
+                MpMenuState.SetStatus("Could not open the save slots.", animate: false);
+            }
         }
 
         /// <summary>
@@ -1299,6 +1456,18 @@ namespace CupheadOnline.Patches
             {
                 MpMenuState.SetStatus(status, animate: false);
             }
+        }
+
+        static void OnCopyLobbyId()
+        {
+            string status;
+            if (!Plugin.Net.TryCopyLobbyId(out status))
+            {
+                MpMenuState.SetStatus(status, animate: false);
+                return;
+            }
+
+            MpMenuState.SetStatus(status, animate: false);
         }
 
         static void OnCopyDiagnostics()

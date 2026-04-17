@@ -34,6 +34,8 @@ namespace CupheadOnline.Net
         Hello           = 11,  // client → host: "I'm here"
         Welcome         = 12,  // host  → client: "Accepted, send Ready"
         Ready           = 13,  // client → host: "Let's play"
+        MenuSceneChange = 14,  // reliable — host→client world-map / cutscene / menu scene load
+        SaveSlotSync    = 15,  // reliable — host→client selected save slot + map context
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -288,6 +290,65 @@ namespace CupheadOnline.Net
             CurrentLevel = r.ReadInt32();
             CurrentTick  = r.ReadUInt32();
             RngSeed      = r.ReadUInt32();
+        }
+    }
+
+    /// <summary>
+    /// Reliable, host→client: trigger a non-level scene transition such as a
+    /// world map or cutscene while preserving the host's transition style.
+    /// </summary>
+    public struct MenuSceneChangePacket : IPacket
+    {
+        public int  SceneEnum;
+        public byte TransitionStart;
+        public byte TransitionEnd;
+        public byte Icon;
+        public uint RngSeed;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(SceneEnum);
+            w.Write(TransitionStart);
+            w.Write(TransitionEnd);
+            w.Write(Icon);
+            w.Write(RngSeed);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            SceneEnum       = r.ReadInt32();
+            TransitionStart = r.ReadByte();
+            TransitionEnd   = r.ReadByte();
+            Icon            = r.ReadByte();
+            RngSeed         = r.ReadUInt32();
+        }
+    }
+
+    /// <summary>
+    /// Reliable, host→client: align the active save slot and character choice
+    /// before the host enters the map or intro cutscene.
+    /// </summary>
+    public struct SaveSlotSyncPacket : IPacket
+    {
+        public byte SlotIndex;
+        public byte Flags;
+        public int  CurrentMapScene;
+
+        public bool IsEmpty => (Flags & 1) != 0;
+        public bool Player1IsMugman => (Flags & 2) != 0;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(SlotIndex);
+            w.Write(Flags);
+            w.Write(CurrentMapScene);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            SlotIndex       = r.ReadByte();
+            Flags           = r.ReadByte();
+            CurrentMapScene = r.ReadInt32();
         }
     }
 }

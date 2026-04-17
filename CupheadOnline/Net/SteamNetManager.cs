@@ -43,7 +43,9 @@ namespace CupheadOnline.Net
         public string CurrentLobbyId => _lobbyId == CSteamID.Nil ? string.Empty : _lobbyId.m_SteamID.ToString();
 
         public bool CanInviteFriend => _steamReady && _isHost && _lobbyId != CSteamID.Nil;
+        public bool CanCopyLobbyId => _steamReady && _lobbyId != CSteamID.Nil;
         public bool CanRetryLastAction => _lastRetryIntent != RetryIntent.None;
+        public bool CanOpenSaveSlot => _steamReady && _state == NetState.Connected && _isHost;
 
         /// <summary>True while a critical async operation is in flight (host/join pending).</summary>
         public bool IsInputLocked => _state == NetState.CreatingLobby
@@ -267,6 +269,25 @@ namespace CupheadOnline.Net
             return false;
         }
 
+        public bool TryCopyLobbyId(out string status)
+        {
+            status = string.Empty;
+            if (!EnsureSteamReady())
+            {
+                status = _steamUnavailableStatus;
+                return false;
+            }
+            if (_lobbyId == CSteamID.Nil)
+            {
+                status = "Host or join a lobby first.";
+                return false;
+            }
+
+            GUIUtility.systemCopyBuffer = "Lobby ID: " + _lobbyId.m_SteamID;
+            status = "Lobby ID copied to clipboard.";
+            return true;
+        }
+
         public string BuildDiagnosticsReport()
         {
             var nl = Environment.NewLine;
@@ -437,9 +458,14 @@ namespace CupheadOnline.Net
             _lobbyId = new CSteamID(r.m_ulSteamIDLobby);
             SteamMatchmaking.SetLobbyData(_lobbyId, "game", "CupheadOnline");
 
-            SetState(NetState.WaitingInLobby,
+            string waitStatus =
                 "Waiting for player...\n"
-                + "Use Invite Friend to send another Steam invite.");
+                + "Use Invite Friend to send another Steam invite.";
+            string copyStatus;
+            if (TryCopyLobbyId(out copyStatus))
+                waitStatus += "\n" + copyStatus;
+
+            SetState(NetState.WaitingInLobby, waitStatus);
             Plugin.Log.LogInfo("[SteamNet] Lobby: " + _lobbyId);
             string inviteStatus;
             if (!OpenInviteDialog(out inviteStatus))
@@ -554,12 +580,11 @@ namespace CupheadOnline.Net
 
             _lastReceive = DateTime.UtcNow;
             string name  = FriendName(_peerId);
-            SetState(NetState.Connected, "Connected - " + name);
-
-            string role = _isHost
-                ? "Host: You\nGuest: " + name
-                : "Host: " + name + "\nGuest: You";
-            FireStatus(role);
+            SetState(
+                NetState.Connected,
+                _isHost
+                    ? "Guest connected.\nSelect OPEN SAVE SLOT to choose a file."
+                    : "Connected.\nWaiting for the host to choose a save slot.");
 
             ConnectionHUD.Show("Connected - " + name);
 
@@ -798,6 +823,8 @@ namespace CupheadOnline.Net
         public void SendWeaponEvent (ref WeaponEventPacket  p) => Send(PacketType.WeaponEvent,  ref p, true);
         public void SendDamageEvent (ref DamageEventPacket  p) => Send(PacketType.DamageEvent,  ref p, true);
         public void SendSceneChange (ref SceneChangePacket  p) => Send(PacketType.SceneChange,  ref p, true);
+        public void SendMenuSceneChange(ref MenuSceneChangePacket p) => Send(PacketType.MenuSceneChange, ref p, true);
+        public void SendSaveSlotSync(ref SaveSlotSyncPacket p) => Send(PacketType.SaveSlotSync, ref p, true);
         public void SendLobbySync   (ref LobbySyncPacket    p) => Send(PacketType.LobbySync,    ref p, true);
 
         void Send<T>(PacketType type, ref T pkt, bool reliable) where T : struct, IPacket
