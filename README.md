@@ -1,4 +1,4 @@
-# CupheadOnline
+# CupHeads
 
 A complete online multiplayer mod for Cuphead with a user-friendly installer.
 
