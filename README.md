@@ -10,12 +10,34 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 
 ## Features
 
-- Steam P2P multiplayer transport
-- Steam lobby and invite flow
+### Multiplayer
+
+- Steam P2P transport built for Cuphead through BepInEx + Harmony
+- Host, join, invite friend, retry last action, and copy lobby diagnostics
+- Host-led save slot flow so the host can open a file and pull the guest into the same run
+- Host-authoritative scene syncing for level and menu transitions
+- Save compatibility checks with warnings for mismatched progress or setup
+- Live connection HUD with role, status, session info, and sync warnings
+- In-game session panel with `F8` toggle for quick diagnostics and session state
+
+### Menu and UX
+
+- Custom multiplayer menu injected into Slot Select
+- Dedicated credits screen
+- Clear Steam readiness and connection status messaging
+- Clipboard helpers for lobby IDs and diagnostics
+- Better retry and reconnect guidance when Steam sessions fail
+
+### Installer
+
 - Automatic Cuphead detection through Steam
-- Automatic BepInEx installation when needed
+- Automatic BepInEx repair or installation when needed
+- Repair-style installs that always refresh the bundled `CupheadOnline.dll`
+- Automatic cleanup of obsolete `LiteNetLib.dll` leftovers from older builds
+- Final verification after install so the setup is checked before you launch
 - One-click mod installation
 - Portable desktop installer
+- Built-in verify, open-folder, and launch-Steam helpers
 
 ## Requirements
 
@@ -38,8 +60,10 @@ If you test outside the Steam launcher, you may need a `steam_appid.txt` next to
 The Electron installer:
 
 - detects your Cuphead install
-- installs BepInEx 5 if it is missing
-- copies `CupheadOnline.dll` into `Cuphead\\BepInEx\\plugins\\CupheadOnline\\`
+- repairs or installs BepInEx 5 if it is missing or damaged
+- always refreshes `CupheadOnline.dll` in `Cuphead\\BepInEx\\plugins\\CupheadOnline\\`
+- removes stale `LiteNetLib.dll` leftovers from the older UDP transport
+- verifies the final install before finishing
 
 The mod then patches the game's menu and gameplay flow through Harmony and uses Steamworks P2P for multiplayer.
 
@@ -82,6 +106,7 @@ The packaged installer is written to `CupheadInstaller\dist\Cupheads.exe`.
 ## Credits
 
 - Germanized and Sh0kr for the mod
+- Made for Daniel
 - BepInEx for the mod framework
 - Harmony for patching
 - Electron for the installer shell

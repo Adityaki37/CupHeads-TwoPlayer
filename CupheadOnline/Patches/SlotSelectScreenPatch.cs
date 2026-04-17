@@ -344,7 +344,7 @@ namespace CupheadOnline.Patches
             BuildCreditsLine(
                 credRoot,
                 "CreditsLine3",
-                "Built for Daniel",
+                "Made for Daniel",
                 new Vector2(0f, -40f),
                 new Vector2(860f, 42f),
                 sample.font,

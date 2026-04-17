@@ -204,7 +204,8 @@
           <svg class="hero-flourish"><use href="#flourish"/></svg>
           <p class="hero-desc">
             Bring a second player into the fight. The installer handles
-            BepInEx and the mod automatically — no file copying, no fuss.
+            BepInEx, refreshes the latest bundled mod files, and cleans old
+            leftovers automatically — no file copying, no fuss.
           </p>
 
           <div class="stickers">
@@ -218,7 +219,7 @@
             </div>
             <div class="sticker s-c">
               <svg class="icon-14"><use href="#i-shield"/></svg>
-              <span>Safe to remove</span>
+              <span>Auto repair</span>
             </div>
           </div>
 
@@ -230,7 +231,7 @@
               </span>
               <span class="btn-stamp-shadow"></span>
             </button>
-            <span class="cta-hint">Takes about a minute</span>
+            <span class="cta-hint" id="welcome-version">Installer</span>
           </div>
         </div>
 
@@ -255,7 +256,7 @@
           <span class="page-chapter">Chapter II</span>
           <h2 class="page-title">Locate the game</h2>
           <svg class="page-flourish"><use href="#flourish"/></svg>
-          <p class="page-lede">Scanning your Steam libraries for Cuphead.</p>
+          <p class="page-lede">Scanning your Steam libraries and preparing a repair-friendly install.</p>
         </header>
 
         <div class="paper-card" id="detect-card">
@@ -289,6 +290,11 @@
               <span class="badge-val" id="bval-plug">—</span>
             </div>
           </div>
+        </div>
+
+        <div class="install-plan hidden" id="install-plan">
+          <span class="plan-kicker">Install Plan</span>
+          <p class="plan-body" id="install-plan-note"></p>
         </div>
 
         <div class="utility-row">
@@ -334,8 +340,13 @@
           <span class="page-chapter">Chapter III</span>
           <h2 class="page-title">Now installing</h2>
           <svg class="page-flourish"><use href="#flourish"/></svg>
-          <p class="page-lede">Downloading the mod loader and deploying files.</p>
+          <p class="page-lede">Repairing or updating your CupheadOnline setup automatically.</p>
         </header>
+
+        <div class="install-summary">
+          <span class="plan-kicker">Autonomous Repair Pass</span>
+          <p class="plan-body" id="install-summary-body"></p>
+        </div>
 
         <div class="install-list">
           <div class="install-item" id="ii-bep">
@@ -356,8 +367,28 @@
               <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" stroke-width="1.6" fill="none"/></svg>
             </div>
             <div class="ii-body">
-              <span class="ii-name">CupheadOnline Plugin</span>
+              <span class="ii-name">Bundled Mod Files</span>
               <span class="ii-status" id="ii-plug-status">Waiting</span>
+            </div>
+          </div>
+
+          <div class="install-item" id="ii-clean">
+            <div class="ii-ring" id="ii-clean-ring">
+              <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" stroke-width="1.6" fill="none"/></svg>
+            </div>
+            <div class="ii-body">
+              <span class="ii-name">Legacy Cleanup</span>
+              <span class="ii-status" id="ii-clean-status">Waiting</span>
+            </div>
+          </div>
+
+          <div class="install-item" id="ii-verify">
+            <div class="ii-ring" id="ii-verify-ring">
+              <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="14" stroke-width="1.6" fill="none"/></svg>
+            </div>
+            <div class="ii-body">
+              <span class="ii-name">Final Verification</span>
+              <span class="ii-status" id="ii-verify-status">Waiting</span>
             </div>
           </div>
         </div>
@@ -380,10 +411,10 @@
         </div>
         <h2 class="done-title">All stamped &amp; sealed</h2>
         <svg class="page-flourish"><use href="#flourish"/></svg>
-        <p class="hero-desc">CupheadOnline is installed.<br>Launch the game through Steam to play.</p>
+        <p class="hero-desc" id="done-summary">CupheadOnline is installed.<br>Launch the game through Steam to play.</p>
         <div class="done-info">
           <svg class="icon-14"><use href="#i-info"/></svg>
-          <span>Both players need this mod installed.</span>
+          <span>Run this installer again any time to refresh or repair the install.</span>
         </div>
         <div class="done-actions">
           <button class="btn-ghost" id="btn-done-open-folder">
@@ -410,9 +441,9 @@
   <footer class="ribbon">
     <span class="ribbon-left">
       <svg class="icon-14"><use href="#i-shield"/></svg>
-      <span>Non-destructive · Reversible · Mod loader is removable</span>
+      <span>Repair-friendly · Refreshes bundled files · Removes old leftovers</span>
     </span>
-    <span class="ribbon-right">v1.0.0</span>
+    <span class="ribbon-right" id="app-version">v1.1.1</span>
   </footer>
 
 </div>

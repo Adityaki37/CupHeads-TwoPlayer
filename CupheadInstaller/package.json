@@ -1,6 +1,6 @@
 {
   "name": "cupheads-installer",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Installer for the Cupheads multiplayer mod",
   "author": "Germanized / Sh0kr",
   "main": "main.js",
@@ -17,7 +17,7 @@
       "icon": "assets/cupheads.ico"
     },
     "extraResources": [
-      { "from": "assets/CupheadOnline.dll", "to": "CupheadOnline.dll" }
+      { "from": "assets", "to": "assets", "filter": ["**/*"] }
     ],
     "files": [
       "main.js",

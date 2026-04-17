@@ -1,35 +1,42 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
-const path   = require('path');
-const fs     = require('fs');
-const https  = require('https');
-const http   = require('http');
-const os     = require('os');
+const path = require('path');
+const fs = require('fs');
+const https = require('https');
+const http = require('http');
+const os = require('os');
 const { execSync } = require('child_process');
 
 let mainWindow;
 
-// ── Window ─────────────────────────────────────────────────────────────────
+const DEFAULT_INSTALL_MANIFEST = Object.freeze({
+  pluginFolder: 'CupheadOnline',
+  files: [
+    { name: 'CupheadOnline.dll', required: true, target: 'CupheadOnline.dll' },
+  ],
+  legacyCleanup: [
+    'LiteNetLib.dll',
+  ],
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width:           880,
-    height:          620,
-    frame:           false,
-    resizable:       false,
+    width: 880,
+    height: 620,
+    frame: false,
+    resizable: false,
     backgroundColor: '#080808',
     webPreferences: {
-      preload:          path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration:  false,
-      sandbox:          false,   // ensure preload has require() access
+      nodeIntegration: false,
+      sandbox: false,
     },
   });
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  // F12 toggles DevTools for debugging
   mainWindow.webContents.on('before-input-event', (_, input) => {
     if (input.key === 'F12' && input.type === 'keyDown')
       mainWindow.webContents.toggleDevTools();
@@ -47,47 +54,52 @@ function createWindow() {
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => app.quit());
 
-// ── Window controls ────────────────────────────────────────────────────────
-
-ipcMain.on('window-close',    () => app.quit());
+ipcMain.on('window-close', () => app.quit());
 ipcMain.on('window-minimize', () => mainWindow && mainWindow.minimize());
-
-// ── Steam / Cuphead detection ──────────────────────────────────────────────
+ipcMain.handle('get-app-version', () => app.getVersion());
 
 function getSteamPath() {
-  // Registry (most reliable on Windows)
   const keys = [
     'HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam',
     'HKLM\\SOFTWARE\\Valve\\Steam',
     'HKCU\\SOFTWARE\\Valve\\Steam',
   ];
+
   for (const key of keys) {
     try {
-      const out = execSync(`reg query "${key}" /v InstallPath`, { encoding: 'utf8', timeout: 3000 });
-      const m = out.match(/InstallPath\s+REG_SZ\s+(.+)/);
-      if (m) return m[1].trim();
-    } catch { /* continue */ }
+      const out = execSync(`reg query "${key}" /v InstallPath`, {
+        encoding: 'utf8',
+        timeout: 3000,
+      });
+      const match = out.match(/InstallPath\s+REG_SZ\s+(.+)/);
+      if (match) return match[1].trim();
+    } catch {
+      // continue
+    }
   }
-  // Fallback: common install locations
-  for (const p of [
+
+  const fallbacks = [
     'C:\\Program Files (x86)\\Steam',
     'C:\\Program Files\\Steam',
     path.join(os.homedir(), 'Steam'),
-  ]) {
-    if (fs.existsSync(path.join(p, 'steam.exe'))) return p;
+  ];
+
+  for (const candidate of fallbacks) {
+    if (fs.existsSync(path.join(candidate, 'steam.exe')))
+      return candidate;
   }
+
   return null;
 }
 
 function parseVdfLibraryPaths(content) {
   const paths = [];
-  // Match every "path" "..." entry in the file
-  const re = /"path"\s+"([^"]+)"/gi;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    // VDF double-escapes backslashes: \\ → \
-    paths.push(m[1].replace(/\\\\/g, '\\'));
-  }
+  const pattern = /"path"\s+"([^"]+)"/gi;
+  let match;
+
+  while ((match = pattern.exec(content)) !== null)
+    paths.push(match[1].replace(/\\\\/g, '\\'));
+
   return paths;
 }
 
@@ -96,34 +108,77 @@ function findCuphead() {
   const candidates = steamPath ? [steamPath] : [];
 
   if (steamPath) {
-    const vdf = path.join(steamPath, 'steamapps', 'libraryfolders.vdf');
-    if (fs.existsSync(vdf)) {
-      const extra = parseVdfLibraryPaths(fs.readFileSync(vdf, 'utf8'));
-      candidates.push(...extra);
+    const vdfPath = path.join(steamPath, 'steamapps', 'libraryfolders.vdf');
+    if (fs.existsSync(vdfPath)) {
+      const extraPaths = parseVdfLibraryPaths(fs.readFileSync(vdfPath, 'utf8'));
+      candidates.push(...extraPaths);
     }
   }
 
-  for (const lib of candidates) {
-    const dir = path.join(lib, 'steamapps', 'common', 'Cuphead');
-    if (fs.existsSync(path.join(dir, 'Cuphead.exe'))) return dir;
+  for (const libraryPath of candidates) {
+    const cupheadDir = path.join(libraryPath, 'steamapps', 'common', 'Cuphead');
+    if (fs.existsSync(path.join(cupheadDir, 'Cuphead.exe')))
+      return cupheadDir;
   }
+
   return null;
 }
 
-ipcMain.handle('detect-cuphead', () => {
-  try { return { path: findCuphead(), error: null }; }
-  catch (e) { return { path: null, error: e.message }; }
-});
+function getBundledAssetRoot() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'assets')
+    : path.join(__dirname, 'assets');
+}
 
-ipcMain.handle('browse-folder', async () => {
-  const r = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
-    title: 'Select Cuphead Installation Folder',
-  });
-  return r.canceled ? null : r.filePaths[0];
-});
+function normalizeInstallManifest(raw) {
+  const manifest = Object.assign({}, DEFAULT_INSTALL_MANIFEST, raw || {});
+
+  const files = Array.isArray(manifest.files) ? manifest.files : DEFAULT_INSTALL_MANIFEST.files;
+  manifest.files = files
+    .filter((file) => file && typeof file.name === 'string' && file.name.trim().length > 0)
+    .map((file) => ({
+      name: file.name,
+      required: file.required !== false,
+      target: typeof file.target === 'string' && file.target.trim().length > 0 ? file.target : file.name,
+    }));
+
+  if (!manifest.files.length)
+    manifest.files = DEFAULT_INSTALL_MANIFEST.files.slice();
+
+  manifest.pluginFolder = typeof manifest.pluginFolder === 'string' && manifest.pluginFolder.trim().length > 0
+    ? manifest.pluginFolder
+    : DEFAULT_INSTALL_MANIFEST.pluginFolder;
+
+  manifest.legacyCleanup = Array.isArray(manifest.legacyCleanup)
+    ? manifest.legacyCleanup.filter((name) => typeof name === 'string' && name.trim().length > 0)
+    : DEFAULT_INSTALL_MANIFEST.legacyCleanup.slice();
+
+  return manifest;
+}
+
+function loadInstallManifest() {
+  const manifestPath = path.join(getBundledAssetRoot(), 'install-manifest.json');
+
+  if (!fs.existsSync(manifestPath))
+    return normalizeInstallManifest(null);
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return normalizeInstallManifest(raw);
+  } catch (err) {
+    console.warn('[main] Failed to read install manifest:', err.message);
+    return normalizeInstallManifest(null);
+  }
+}
+
+function getPluginDir(cupheadDir, manifest) {
+  const activeManifest = manifest || loadInstallManifest();
+  return path.join(cupheadDir, 'BepInEx', 'plugins', activeManifest.pluginFolder);
+}
 
 function getInstallState(dir) {
+  const manifest = loadInstallManifest();
+
   if (!dir || !fs.existsSync(dir)) {
     return {
       valid: false,
@@ -132,22 +187,51 @@ function getInstallState(dir) {
       hasDoorstop: false,
       hasPlugin: false,
       ready: false,
+      pluginDir: '',
+      installedPluginFiles: [],
+      missingPluginFiles: manifest.files.map((file) => file.target),
+      hasLegacyFiles: false,
+      legacyFilesPresent: [],
+      manifest,
     };
   }
 
+  const pluginDir = getPluginDir(dir, manifest);
+  const installedPluginFiles = [];
+  const missingPluginFiles = [];
+
+  for (const file of manifest.files) {
+    const targetPath = path.join(pluginDir, file.target);
+    if (fs.existsSync(targetPath))
+      installedPluginFiles.push(file.target);
+    else if (file.required)
+      missingPluginFiles.push(file.target);
+  }
+
+  const legacyFilesPresent = manifest.legacyCleanup.filter((name) =>
+    fs.existsSync(path.join(pluginDir, name)));
+
   const state = {
-    valid:         fs.existsSync(path.join(dir, 'Cuphead.exe')),
-    hasBepInEx:    fs.existsSync(path.join(dir, 'BepInEx')),
+    valid: fs.existsSync(path.join(dir, 'Cuphead.exe')),
+    hasBepInEx: fs.existsSync(path.join(dir, 'BepInEx')),
     hasBepInExCore: fs.existsSync(path.join(dir, 'BepInEx', 'core', 'BepInEx.dll')),
-    hasDoorstop:   fs.existsSync(path.join(dir, 'winhttp.dll')),
-    hasPlugin:     fs.existsSync(path.join(dir, 'BepInEx', 'plugins', 'CupheadOnline', 'CupheadOnline.dll')),
+    hasDoorstop: fs.existsSync(path.join(dir, 'winhttp.dll')),
+    hasPlugin: missingPluginFiles.length === 0,
+    pluginDir,
+    installedPluginFiles,
+    missingPluginFiles,
+    hasLegacyFiles: legacyFilesPresent.length > 0,
+    legacyFilesPresent,
+    manifest,
   };
+
   state.ready = state.valid && state.hasBepInExCore && state.hasDoorstop && state.hasPlugin;
   return state;
 }
 
 function verifyInstall(dir) {
   const checks = getInstallState(dir);
+
   if (!checks.valid) {
     return {
       ok: false,
@@ -159,26 +243,65 @@ function verifyInstall(dir) {
   const missing = [];
   if (!checks.hasBepInExCore) missing.push('BepInEx core');
   if (!checks.hasDoorstop) missing.push('winhttp.dll bootstrap');
-  if (!checks.hasPlugin) missing.push('CupheadOnline.dll');
+  if (checks.missingPluginFiles.length > 0)
+    missing.push(...checks.missingPluginFiles);
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message: 'Missing: ' + missing.join(', ') + '.',
+      checks,
+    };
+  }
+
+  if (checks.hasLegacyFiles) {
+    return {
+      ok: true,
+      message: 'Install is usable, but legacy files were found: '
+        + checks.legacyFilesPresent.join(', ')
+        + '. Run Install to refresh the mod and clean them up.',
+      checks,
+    };
+  }
 
   return {
-    ok: missing.length === 0,
-    message: missing.length === 0
-      ? 'Install looks good. Cuphead, BepInEx, and the plugin are all in place.'
-      : 'Missing: ' + missing.join(', ') + '.',
+    ok: true,
+    message: 'Install looks good. BepInEx and bundled mod files are all in place.',
     checks,
   };
 }
 
+function resolveBundledFile(fileName) {
+  return path.join(getBundledAssetRoot(), fileName);
+}
+
+ipcMain.handle('detect-cuphead', () => {
+  try {
+    return { path: findCuphead(), error: null };
+  } catch (err) {
+    return { path: null, error: err.message };
+  }
+});
+
+ipcMain.handle('browse-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory'],
+    title: 'Select Cuphead Installation Folder',
+  });
+
+  return result.canceled ? null : result.filePaths[0];
+});
+
 ipcMain.handle('check-install-state', (_, dir) => getInstallState(dir));
 
 ipcMain.handle('open-folder', async (_, dir) => {
-  if (!dir || !fs.existsSync(dir))
+  if (!dir || !fs.existsSync(dir)) {
     return { ok: false, message: 'Pick a valid Cuphead folder first.' };
+  }
 
-  const err = await shell.openPath(dir);
-  return err
-    ? { ok: false, message: err }
+  const error = await shell.openPath(dir);
+  return error
+    ? { ok: false, message: error }
     : { ok: true, message: 'Opened the Cuphead folder.' };
 });
 
@@ -193,61 +316,69 @@ ipcMain.handle('launch-steam', async () => {
 
 ipcMain.handle('verify-install', (_, dir) => verifyInstall(dir));
 
-// ── Architecture detection (PE header) ────────────────────────────────────
-
 function getCupheadArch(cupheadDir) {
   try {
-    const exe = path.join(cupheadDir, 'Cuphead.exe');
+    const exePath = path.join(cupheadDir, 'Cuphead.exe');
     const buf = Buffer.alloc(0x200);
-    const fd  = fs.openSync(exe, 'r');
+    const fd = fs.openSync(exePath, 'r');
     fs.readSync(fd, buf, 0, 0x200, 0);
     fs.closeSync(fd);
-    if (buf.readUInt16LE(0) !== 0x5A4D) return 'x64'; // no MZ
-    const peOff = buf.readUInt32LE(0x3C);
-    if (peOff + 6 > buf.length)            return 'x64';
-    if (buf.readUInt32LE(peOff) !== 0x4550) return 'x64'; // no PE\0\0
-    const machine = buf.readUInt16LE(peOff + 4);
-    return machine === 0x014C ? 'x86' : 'x64'; // 0x014C = i386
-  } catch { return 'x64'; }
-}
 
-// ── Download with redirect + progress ─────────────────────────────────────
+    if (buf.readUInt16LE(0) !== 0x5A4D) return 'x64';
+
+    const peOffset = buf.readUInt32LE(0x3C);
+    if (peOffset + 6 > buf.length) return 'x64';
+    if (buf.readUInt32LE(peOffset) !== 0x4550) return 'x64';
+
+    const machine = buf.readUInt16LE(peOffset + 4);
+    return machine === 0x014C ? 'x86' : 'x64';
+  } catch {
+    return 'x64';
+  }
+}
 
 function download(url, dest, onProgress) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
-    let hops = 0;
+    let redirectCount = 0;
 
-    function doGet(reqUrl) {
-      const mod = reqUrl.startsWith('https') ? https : http;
-      const req = mod.get(reqUrl, (res) => {
+    function doGet(requestUrl) {
+      const transport = requestUrl.startsWith('https') ? https : http;
+      const req = transport.get(requestUrl, (res) => {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          if (++hops > 10) { reject(new Error('Too many redirects')); return; }
+          if (++redirectCount > 10) {
+            reject(new Error('Too many redirects'));
+            return;
+          }
           doGet(res.headers.location);
           return;
         }
+
         if (res.statusCode !== 200) {
           reject(new Error('Download failed (HTTP ' + res.statusCode + ')'));
           return;
         }
+
         const total = parseInt(res.headers['content-length'] || '0', 10);
-        let recv = 0;
+        let received = 0;
+
         res.on('data', (chunk) => {
-          recv += chunk.length;
-          if (total > 0 && onProgress) onProgress(Math.round(recv / total * 100));
+          received += chunk.length;
+          if (total > 0 && onProgress)
+            onProgress(Math.round((received / total) * 100));
         });
+
         res.pipe(file);
         file.on('finish', () => file.close(resolve));
-        res.on('error',   (e) => file.close(() => reject(e)));
+        res.on('error', (err) => file.close(() => reject(err)));
       });
-      req.on('error', (e) => file.close(() => reject(e)));
+
+      req.on('error', (err) => file.close(() => reject(err)));
     }
 
     doGet(url);
   });
 }
-
-// ── Install handler ────────────────────────────────────────────────────────
 
 const BEPINEX = {
   x64: 'https://github.com/BepInEx/BepInEx/releases/download/v5.4.23.2/BepInEx_x64_5.4.23.2.zip',
@@ -260,16 +391,20 @@ function fetchJson(url) {
       headers: { 'User-Agent': 'CupHeads-Installer' },
     }, (res) => {
       let body = '';
-      res.on('data', (chunk) => body += chunk);
+      res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
-          try { resolve(JSON.parse(body)); }
-          catch (err) { reject(err); }
+          try {
+            resolve(JSON.parse(body));
+          } catch (err) {
+            reject(err);
+          }
         } else {
           reject(new Error(`HTTP ${res.statusCode}: ${url}`));
         }
       });
     });
+
     req.on('error', reject);
   });
 }
@@ -277,15 +412,20 @@ function fetchJson(url) {
 async function getLatestBepInExUrl(arch) {
   try {
     const release = await fetchJson('https://api.github.com/repos/BepInEx/BepInEx/releases/latest');
-    if (!release || !Array.isArray(release.assets)) throw new Error('Invalid release data');
-    const assetRE = arch === 'x64'
+    if (!release || !Array.isArray(release.assets))
+      throw new Error('Invalid release data');
+
+    const assetPattern = arch === 'x64'
       ? /BepInEx_x64_.*\.zip$/i
       : /BepInEx_x86_.*\.zip$/i;
-    const asset = release.assets.find((a) => assetRE.test(a.name));
-    if (asset && asset.browser_download_url) return asset.browser_download_url;
+
+    const asset = release.assets.find((item) => assetPattern.test(item.name));
+    if (asset && asset.browser_download_url)
+      return asset.browser_download_url;
   } catch (err) {
-    console.warn('[main] failed to resolve latest BepInEx release:', err.message);
+    console.warn('[main] Failed to resolve latest BepInEx release:', err.message);
   }
+
   return BEPINEX[arch];
 }
 
@@ -294,52 +434,164 @@ ipcMain.on('install', async (event, { cupheadDir, skipBepInEx }) => {
     try {
       if (!event.sender.isDestroyed())
         event.sender.send('install-progress', Object.assign({ type }, data || {}));
-    } catch { /* window closed */ }
+    } catch {
+      // window closed
+    }
   };
 
   try {
-    // ── Step 1: BepInEx ──────────────────────────────────────────────────
+    const manifest = loadInstallManifest();
+    const existingState = getInstallState(cupheadDir);
+
+    if (!existingState.valid)
+      throw new Error('Pick a valid Cuphead folder before installing.');
+
     if (!skipBepInEx) {
-      const arch    = getCupheadArch(cupheadDir);
-      const zipUrl  = await getLatestBepInExUrl(arch);
+      const arch = getCupheadArch(cupheadDir);
+      const zipUrl = await getLatestBepInExUrl(arch);
       const zipPath = path.join(os.tmpdir(), path.basename(zipUrl));
 
-      send('step', { step: 'bepinex', status: 'downloading', progress: 0, arch, url: zipUrl });
+      send('step', {
+        step: 'bepinex',
+        status: 'downloading',
+        progress: 0,
+        arch,
+        message: 'Downloading BepInEx repair package...',
+      });
 
-      await download(zipUrl, zipPath, (pct) =>
-        send('step', { step: 'bepinex', status: 'downloading', progress: pct, arch }));
+      await download(zipUrl, zipPath, (pct) => {
+        send('step', {
+          step: 'bepinex',
+          status: 'downloading',
+          progress: pct,
+          arch,
+          message: `Downloading BepInEx repair package... ${pct}%`,
+        });
+      });
 
-      send('step', { step: 'bepinex', status: 'extracting', progress: 100 });
+      send('step', {
+        step: 'bepinex',
+        status: 'extracting',
+        progress: 100,
+        message: 'Extracting BepInEx into Cuphead...',
+      });
 
       const AdmZip = require('adm-zip');
-      new AdmZip(zipPath).extractAllTo(cupheadDir, /*overwrite*/ true);
+      new AdmZip(zipPath).extractAllTo(cupheadDir, true);
       try { fs.unlinkSync(zipPath); } catch { /* best-effort */ }
 
-      send('step', { step: 'bepinex', status: 'done', progress: 100 });
+      send('step', {
+        step: 'bepinex',
+        status: 'done',
+        progress: 100,
+        message: 'BepInEx is ready.',
+      });
     } else {
-      send('step', { step: 'bepinex', status: 'skipped' });
+      send('step', {
+        step: 'bepinex',
+        status: 'skipped',
+        progress: 100,
+        message: 'BepInEx already looks healthy.',
+      });
     }
 
-    // ── Step 2: CupheadOnline DLL ────────────────────────────────────────
-    send('step', { step: 'plugin', status: 'installing' });
+    const pluginDir = getPluginDir(cupheadDir, manifest);
+    fs.mkdirSync(pluginDir, { recursive: true });
 
-    const pluginsDir = path.join(cupheadDir, 'BepInEx', 'plugins', 'CupheadOnline');
-    fs.mkdirSync(pluginsDir, { recursive: true });
+    const bundledFiles = manifest.files.map((file) => {
+      const sourcePath = resolveBundledFile(file.name);
+      if (!fs.existsSync(sourcePath)) {
+        throw new Error(
+          file.name + ' was not found in the installer package.\n'
+          + 'Rebuild the installer after staging the latest bundled files.'
+        );
+      }
 
-    const dllSrc = app.isPackaged
-      ? path.join(process.resourcesPath, 'CupheadOnline.dll')
-      : path.join(__dirname, 'assets', 'CupheadOnline.dll');
+      return {
+        name: file.name,
+        target: file.target,
+        sourcePath,
+        destinationPath: path.join(pluginDir, file.target),
+      };
+    });
 
-    if (!fs.existsSync(dllSrc))
-      throw new Error('CupheadOnline.dll not found in installer package.\n' +
-                      'Run "npm run predist" to copy the DLL first.');
+    send('step', {
+      step: 'plugin',
+      status: 'installing',
+      progress: 0,
+      message: 'Refreshing bundled mod files...',
+    });
 
-    fs.copyFileSync(dllSrc, path.join(pluginsDir, 'CupheadOnline.dll'));
-    send('step', { step: 'plugin', status: 'done' });
+    for (let i = 0; i < bundledFiles.length; i += 1) {
+      const file = bundledFiles[i];
+      fs.copyFileSync(file.sourcePath, file.destinationPath);
 
-    // ── All done ──────────────────────────────────────────────────────────
-    send('done', {});
+      const progress = Math.round(((i + 1) / bundledFiles.length) * 100);
+      send('step', {
+        step: 'plugin',
+        status: 'installing',
+        progress,
+        message: 'Refreshing bundled mod files...',
+      });
+    }
 
+    send('step', {
+      step: 'plugin',
+      status: 'done',
+      progress: 100,
+      message: 'Bundled mod files refreshed.',
+      files: bundledFiles.map((file) => file.target),
+    });
+
+    send('step', {
+      step: 'cleanup',
+      status: 'installing',
+      progress: 0,
+      message: 'Cleaning legacy networking leftovers...',
+    });
+
+    const removedFiles = [];
+    for (const fileName of manifest.legacyCleanup) {
+      const targetPath = path.join(pluginDir, fileName);
+      if (fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+        removedFiles.push(fileName);
+      }
+    }
+
+    send('step', {
+      step: 'cleanup',
+      status: removedFiles.length > 0 ? 'done' : 'skipped',
+      progress: 100,
+      message: removedFiles.length > 0
+        ? 'Removed legacy files: ' + removedFiles.join(', ') + '.'
+        : 'No legacy files needed cleanup.',
+      removedFiles,
+    });
+
+    send('step', {
+      step: 'verify',
+      status: 'installing',
+      progress: 0,
+      message: 'Verifying final install...',
+    });
+
+    const verification = verifyInstall(cupheadDir);
+    if (!verification.ok)
+      throw new Error(verification.message);
+
+    send('step', {
+      step: 'verify',
+      status: 'done',
+      progress: 100,
+      message: verification.message,
+    });
+
+    send('done', {
+      summary: verification.message,
+      removedFiles,
+      installedFiles: bundledFiles.map((file) => file.target),
+    });
   } catch (err) {
     send('error', { message: err.message });
   }

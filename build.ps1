@@ -112,6 +112,7 @@ if (-not (Test-Path $ModDll)) {
 
 Write-Step "Preparing dist/"
 New-Item -ItemType Directory -Force $DistDir | Out-Null
+Remove-Item (Join-Path $DistDir "LiteNetLib.dll") -Force -ErrorAction SilentlyContinue
 Copy-Item $ModDll (Join-Path $DistDir "CupheadOnline.dll") -Force
 
 Write-Step "Staging DLL for Electron installer"
@@ -148,6 +149,7 @@ if (-not $NoDeploy) {
     Write-Step "Deploying to BepInEx plugin folder"
     $PluginDir = Join-Path $CupheadPath "BepInEx\plugins\CupheadOnline"
     New-Item -ItemType Directory -Force $PluginDir | Out-Null
+    Remove-Item (Join-Path $PluginDir "LiteNetLib.dll") -Force -ErrorAction SilentlyContinue
     Copy-Item $ModDll (Join-Path $PluginDir "CupheadOnline.dll") -Force
     Write-Host "  Deployed to: $PluginDir" -ForegroundColor Green
 }

@@ -3,6 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('installer', {
+  getAppVersion:    ()    => ipcRenderer.invoke('get-app-version'),
   detectCuphead:    ()    => ipcRenderer.invoke('detect-cuphead'),
   browseFolder:     ()    => ipcRenderer.invoke('browse-folder'),
   checkInstallState: (d)  => ipcRenderer.invoke('check-install-state', d),

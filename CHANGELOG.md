@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.1 - 2026-04-17
+
+- Upgraded the Electron installer so every install acts like a repair pass: it refreshes the bundled `CupheadOnline.dll`, repairs BepInEx only when needed, and verifies the final setup before finishing.
+- Added automatic cleanup for legacy `LiteNetLib.dll` leftovers from the older UDP transport so stale files do not stick around in the plugin folder or packaged `dist` output.
+- Polished the installer UI with clearer repair/update messaging, install-plan summaries, final verification feedback, and better wording around what the installer actually refreshes.
+- Updated the README feature list and install notes to match the current save-sync, session, and self-repair installer workflow.
+
 ## v1.1.0 - 2026-04-17
 
 - Added host/guest save compatibility checks so the mod now compares the chosen slot, map progress, DLC usage, coins, and completion before a run starts.

@@ -1,0 +1,13 @@
+{
+  "pluginFolder": "CupheadOnline",
+  "files": [
+    {
+      "name": "CupheadOnline.dll",
+      "required": true,
+      "target": "CupheadOnline.dll"
+    }
+  ],
+  "legacyCleanup": [
+    "LiteNetLib.dll"
+  ]
+}
