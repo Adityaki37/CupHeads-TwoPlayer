@@ -34,8 +34,10 @@ namespace CupheadOnline.Sync
                 + ", empty="
                 + pkt.IsEmpty
                 + ", mugman="
-                + pkt.Player1IsMugman
-                + ").");
+                    + pkt.Player1IsMugman
+                    + ").");
+
+            SessionSync.ApplyRemoteSaveSelection(ref pkt);
         }
     }
 }

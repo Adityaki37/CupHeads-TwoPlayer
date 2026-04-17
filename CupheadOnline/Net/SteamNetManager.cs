@@ -313,6 +313,13 @@ namespace CupheadOnline.Net
                 sb.AppendLine(presence);
             }
 
+            string sessionDiagnostics = SessionSync.BuildDiagnosticsSection();
+            if (!string.IsNullOrEmpty(sessionDiagnostics))
+            {
+                sb.AppendLine("Session:");
+                sb.AppendLine(sessionDiagnostics);
+            }
+
             return sb.ToString().TrimEnd();
         }
 
@@ -587,6 +594,7 @@ namespace CupheadOnline.Net
                     : "Connected.\nWaiting for the host to choose a save slot.");
 
             ConnectionHUD.Show("Connected - " + name);
+            SessionSync.OnConnected(_isHost);
 
             if (_isHost)
             {
@@ -597,6 +605,8 @@ namespace CupheadOnline.Net
                     RngSeed      = RngSync.CurrentSeed,
                 };
                 Send(PacketType.SessionStart, ref pkt, reliable: true);
+                SessionSync.BroadcastSelectedSaveProfile();
+                SessionSync.BroadcastSessionSnapshot(true);
             }
         }
 
@@ -825,7 +835,9 @@ namespace CupheadOnline.Net
         public void SendSceneChange (ref SceneChangePacket  p) => Send(PacketType.SceneChange,  ref p, true);
         public void SendMenuSceneChange(ref MenuSceneChangePacket p) => Send(PacketType.MenuSceneChange, ref p, true);
         public void SendSaveSlotSync(ref SaveSlotSyncPacket p) => Send(PacketType.SaveSlotSync, ref p, true);
+        public void SendSaveProfile(ref SaveProfilePacket p) => Send(PacketType.SaveProfile, ref p, true);
         public void SendLobbySync   (ref LobbySyncPacket    p) => Send(PacketType.LobbySync,    ref p, true);
+        public void SendSessionSnapshot(ref SessionSnapshotPacket p, bool reliable = true) => Send(PacketType.SessionSnapshot, ref p, reliable);
 
         void Send<T>(PacketType type, ref T pkt, bool reliable) where T : struct, IPacket
         {

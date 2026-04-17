@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.0 - 2026-04-17
+
+- Added host/guest save compatibility checks so the mod now compares the chosen slot, map progress, DLC usage, coins, and completion before a run starts.
+- Added periodic host session snapshots for reconnect recovery and lightweight desync warnings, plus stronger host-side enemy state broadcasting during live play.
+- Added a new in-game session panel that can be viewed while paused or toggled with `F8`, including session stage, save/sync status, and local deaths, retries, and parries.
+- Upgraded the connection HUD and multiplayer menu with live stage summaries, compatibility warnings, and richer session diagnostics.
+- Added run-stat tracking patches for retries, parries, and player deaths to make playtesting and debugging easier.
+
 ## v1.0.3 - 2026-04-17
 
 - Added a host-led `OPEN SAVE SLOT` flow so the multiplayer connection can stay alive while the host returns to Cuphead's normal save selection screen.

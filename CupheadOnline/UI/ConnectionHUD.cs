@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using CupheadOnline.Sync;
 
 namespace CupheadOnline.UI
 {
@@ -259,6 +260,25 @@ namespace CupheadOnline.UI
             {
                 if (_connectedAt < 0f)
                     _connectedAt = Time.unscaledTime;
+
+                if (_statusLabel != null)
+                {
+                    if (SessionSync.DesyncSeverity >= SessionIssueSeverity.Warning)
+                    {
+                        _statusLabel.text = SessionSync.DesyncSummary;
+                        _statusLabel.color = SessionSync.GetSeverityColor(SessionSync.DesyncSeverity);
+                    }
+                    else if (SessionSync.CompatibilitySeverity >= SessionIssueSeverity.Warning)
+                    {
+                        _statusLabel.text = SessionSync.CompatibilitySummary;
+                        _statusLabel.color = SessionSync.GetSeverityColor(SessionSync.CompatibilitySeverity);
+                    }
+                    else
+                    {
+                        _statusLabel.text = SessionSync.GetStageSummary();
+                        _statusLabel.color = TextColour;
+                    }
+                }
 
                 string line = (Plugin.Net.IsHost ? "HOST" : "CLIENT")
                     + " | "

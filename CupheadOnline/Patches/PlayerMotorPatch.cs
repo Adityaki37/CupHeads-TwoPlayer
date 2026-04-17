@@ -33,6 +33,7 @@ namespace CupheadOnline.Patches
             if (MultiplayerSession.IsRemotePlayer(player.id))
             {
                 // ── REMOTE PLAYER: replace FixedUpdate entirely ───────────────
+                RemoteInputDriver.Tick();
                 ApplyRemoteState(__instance);
                 return false; // skip original
             }

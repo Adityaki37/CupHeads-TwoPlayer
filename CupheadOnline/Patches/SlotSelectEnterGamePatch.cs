@@ -46,7 +46,10 @@ namespace CupheadOnline.Patches
                 Flags           = (byte)((isEmpty ? 1 : 0) | (slot.isPlayer1Mugman ? 2 : 0)),
                 CurrentMapScene = (int)currentMap,
             };
+            Sync.SessionSync.RecordSelectedSave(ref pkt);
             Plugin.Net.SendSaveSlotSync(ref pkt);
+            Sync.SessionSync.BroadcastSelectedSaveProfile();
+            Sync.SessionSync.BroadcastSessionSnapshot(true);
             Plugin.Log.LogInfo(
                 "[SaveSync] Broadcast host slot "
                 + slotIndex

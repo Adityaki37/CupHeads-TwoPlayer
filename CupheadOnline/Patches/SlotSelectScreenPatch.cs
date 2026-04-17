@@ -5,6 +5,7 @@ using Steamworks;
 using UnityEngine;
 using UnityEngine.UI;
 using CupheadOnline.UI;
+using CupheadOnline.Sync;
 
 namespace CupheadOnline.Patches
 {
@@ -753,15 +754,15 @@ namespace CupheadOnline.Patches
 
             if (Plugin.Net.IsConnected)
             {
-                footer += Plugin.Net.IsHost
-                    ? "  |  Guest connected - press Start to choose a save"
-                    : "  |  Connected - waiting for host save";
+                string sessionHint = SessionSync.GetFooterHint();
+                if (!string.IsNullOrEmpty(sessionHint))
+                    footer += "  |  " + sessionHint;
             }
             else if (Plugin.Net.IsInLobby)
             {
-                footer += Plugin.Net.IsHost
-                    ? "  |  Lobby ready - invite or share the lobby ID"
-                    : "  |  Lobby joined - finishing connection";
+                string sessionHint = SessionSync.GetFooterHint();
+                if (!string.IsNullOrEmpty(sessionHint))
+                    footer += "  |  " + sessionHint;
             }
             else if (!Plugin.Net.IsSteamReady)
             {
@@ -932,6 +933,9 @@ namespace CupheadOnline.Patches
                 case MpMenuState.HostIndex:
                     if (Plugin.Net.IsConnected)
                     {
+                        if (SessionSync.CompatibilitySeverity >= SessionIssueSeverity.Warning)
+                            return SessionSync.CompatibilitySummary;
+
                         return Plugin.Net.IsHost
                             ? "Open Cuphead's normal save slots and choose the file you want to play together."
                             : "Connected. Wait for the host to choose a save slot.";
@@ -942,9 +946,16 @@ namespace CupheadOnline.Patches
 
                 case MpMenuState.JoinIndex:
                     if (Plugin.Net.IsConnected)
+                    {
+                        if (SessionSync.DesyncSeverity >= SessionIssueSeverity.Warning)
+                            return SessionSync.DesyncSummary;
+                        if (SessionSync.CompatibilitySeverity >= SessionIssueSeverity.Warning)
+                            return SessionSync.CompatibilitySummary;
+
                         return Plugin.Net.IsHost
                             ? "Your guest is connected. Use OPEN SAVE SLOT when you are ready."
                             : "Stay here while the host opens a save slot.";
+                    }
                     if (_joinOverlayReady)
                         return "Open Steam Friends and wait for the host invite.";
                     if (TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId))
@@ -1345,6 +1356,11 @@ namespace CupheadOnline.Patches
                 if (!string.IsNullOrEmpty(peerName) && peerName != "Unknown Player")
                     p = "Peer: " + peerName + "\nState: " + Plugin.Net.CurrentStateName;
             }
+
+            string sessionSummary = SessionSync.GetMenuPresenceSummary();
+            if (!string.IsNullOrEmpty(sessionSummary))
+                p = string.IsNullOrEmpty(p) ? sessionSummary : p + "\n" + sessionSummary;
+
             if (p == _lastPresence) return;   // only assign when string actually changes
             _lastPresence = p;
             MpMenuState.PresenceText.text = p;

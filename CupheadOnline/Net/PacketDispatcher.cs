@@ -106,13 +106,31 @@ namespace CupheadOnline.Net
                     break;
                 }
 
+                case PacketType.SaveProfile:
+                {
+                    var pkt = new SaveProfilePacket();
+                    pkt.Read(r);
+                    SessionSync.ApplyRemoteSaveProfile(pkt);
+                    break;
+                }
+
+                case PacketType.SessionSnapshot:
+                {
+                    if (MultiplayerSession.IsHost) break;
+                    var pkt = new SessionSnapshotPacket();
+                    pkt.Read(r);
+                    SessionSync.ApplyHostSnapshot(pkt);
+                    break;
+                }
+
                 case PacketType.SessionStart:
                 {
                     if (MultiplayerSession.IsHost) break;
                     var pkt = new SessionStartPacket();
                     pkt.Read(r);
                     RngSync.SetSeed(pkt.RngSeed);
-                    MultiplayerSession.StartAsClient();
+                    if (!MultiplayerSession.IsActive || MultiplayerSession.IsHost)
+                        MultiplayerSession.StartAsClient();
                     if (Level.Current != null)
                         SceneLoader.LoadLevel((Levels)pkt.CurrentLevel, SceneLoader.Transition.Iris);
                     break;

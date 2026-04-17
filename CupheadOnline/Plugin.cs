@@ -8,6 +8,7 @@ using UnityEngine;
 using CupheadOnline.Net;
 using CupheadOnline.UI;
 using CupheadOnline.Patches;
+using CupheadOnline.Sync;
 
 namespace CupheadOnline
 {
@@ -26,11 +27,13 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgVerboseLogging;
         static ConfigEntry<bool> _cfgAutoOpenSteamFriends;
         static ConfigEntry<bool> _cfgShowCreditsMenu;
+        static ConfigEntry<bool> _cfgShowPauseSessionPanel;
 
         public static bool ShowConnectionHud => _cfgShowConnectionHud == null || _cfgShowConnectionHud.Value;
         public static bool VerboseLoggingEnabled => _cfgVerboseLogging != null && _cfgVerboseLogging.Value;
         public static bool AutoOpenSteamFriends => _cfgAutoOpenSteamFriends != null && _cfgAutoOpenSteamFriends.Value;
         public static bool ShowCreditsMenu => _cfgShowCreditsMenu == null || _cfgShowCreditsMenu.Value;
+        public static bool ShowPauseSessionPanel => _cfgShowPauseSessionPanel == null || _cfgShowPauseSessionPanel.Value;
 
         // ──────────────────────────────────────────────────────────────────────
         //  Unity lifecycle
@@ -49,6 +52,8 @@ namespace CupheadOnline
                 "Open the Steam Friends overlay immediately when Join Game is selected.");
             _cfgShowCreditsMenu = Config.Bind("UI", "ShowCreditsMenu", true,
                 "Show the custom Credits entry on the title screen.");
+            _cfgShowPauseSessionPanel = Config.Bind("UI", "ShowPauseSessionPanel", true,
+                "Show the in-game session panel while paused, or when F8 is toggled.");
 
             // Networking manager — Steam P2P transport (lobby + invite flow)
             Net = new SteamNetManager();
@@ -109,8 +114,12 @@ namespace CupheadOnline
             PatchSafe(harmony, typeof(SceneLoaderLevelsPatch));
             PatchSafe(harmony, typeof(SceneLoaderScenesPatch));
             PatchSafe(harmony, typeof(SlotSelectEnterGamePatch));
+            PatchSafe(harmony, typeof(LevelPlayerDeathStatsPatch));
+            PatchSafe(harmony, typeof(SceneLoaderRetryStatsPatch));
+            PatchSafe(harmony, typeof(LevelPlayerParryStatsPatch));
 
             Log.LogInfo("[Plugin] Patch pass complete.");
+            SessionPausePanel.Ensure();
         }
 
         static void PatchSafe(Harmony harmony, Type patchType)
@@ -130,6 +139,9 @@ namespace CupheadOnline
         {
             MainThreadQueue.Drain();
             Net?.Poll();
+            EnemySyncManager.HostTick();
+            SessionSync.Update();
+            SessionPausePanel.Ensure();
         }
 
         void OnLevelWasLoaded(int level)
@@ -158,7 +170,8 @@ namespace CupheadOnline
                           + "HUD Enabled: " + ShowConnectionHud + nl
                           + "Verbose Logging: " + VerboseLoggingEnabled + nl
                           + "Auto Open Steam Friends: " + AutoOpenSteamFriends + nl
-                          + "Show Credits Menu: " + ShowCreditsMenu + nl;
+                          + "Show Credits Menu: " + ShowCreditsMenu + nl
+                          + "Show Pause Session Panel: " + ShowPauseSessionPanel + nl;
 
             if (Net != null)
                 report += nl + Net.BuildDiagnosticsReport();
@@ -173,6 +186,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupheadOnline";
-        public const string VERSION = "1.0.3";
+        public const string VERSION = "1.1.0";
     }
 }
