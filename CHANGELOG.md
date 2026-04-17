@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.2 - 2026-04-17
+
+- Fixed the multiplayer submenu back behavior so `BACK`, `Escape`, and controller `B` cleanly return to the main menu instead of appearing to refresh the submenu.
+- Added a permanent multiplayer hint that explicitly says to press `Escape` or controller `B` to go back.
+
 ## v1.0.1 - 2026-04-17
 
 - Fixed Steam startup guards so Steam P2P polling only runs after Steamworks is initialized and stops spamming errors when the game is not launched through Steam.

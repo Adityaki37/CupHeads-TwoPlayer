@@ -59,6 +59,7 @@ namespace CupheadOnline.Patches
         internal static Text             StatusText;
         internal static Text             PresenceText;
         internal static Text             HintText;
+        internal static Text             BackHintText;
         internal static SlotSelectScreen ScreenInstance;
 
         // Status animation
@@ -102,6 +103,7 @@ namespace CupheadOnline.Patches
             StatusText     = null;
             PresenceText   = null;
             HintText       = null;
+            BackHintText   = null;
             ScreenInstance = null;
             StatusBase     = "";
             StatusAnimate  = false;
@@ -203,7 +205,7 @@ namespace CupheadOnline.Patches
             MpMenuState.MpContainer   = mpRoot;
             MpMenuState.MpCanvasGroup = mpCg;
 
-            var mpLayout   = BuildLayout(mpRoot, new Vector2(0f, 86f), 12f);
+            var mpLayout   = BuildLayout(mpRoot, new Vector2(0f, 54f), 12f);
             MpMenuState.MpLayoutRoot = mpLayout.GetComponent<RectTransform>();
             var hostGO     = CloneItem(exitGO, mpLayout, "HOST GAME");
             var joinGO     = CloneItem(exitGO, mpLayout, "JOIN GAME");
@@ -223,7 +225,7 @@ namespace CupheadOnline.Patches
             };
 
             var badgeGO = BuildText(mpRoot, "SteamBadgeText",
-                new Vector2(0f, 228f), new Vector2(440f, 28f),
+                new Vector2(0f, 244f), new Vector2(440f, 28f),
                 sample.font, Mathf.Max(13, sample.fontSize - 5),
                 new Color(0.95f, 0.85f, 0.40f, 0.95f));
             MpMenuState.SteamBadgeText = badgeGO.GetComponent<Text>();
@@ -246,12 +248,20 @@ namespace CupheadOnline.Patches
             }
 
             var mpHintGO = BuildText(mpRoot, "MpHintText",
-                new Vector2(0f, -332f), new Vector2(760f, 48f),
+                new Vector2(0f, -320f), new Vector2(760f, 48f),
                 sample.font, Mathf.Max(12, sample.fontSize - 6),
                 new Color(0.6f, 0.6f, 0.6f, 0.8f));
             MpMenuState.HintText = mpHintGO.GetComponent<Text>();
             if (MpMenuState.HintText != null)
-                MpMenuState.HintText.text = "[ Accept to choose. Press Escape / B to go back. ]";
+                MpMenuState.HintText.text = "[ Accept to choose. ]";
+
+            var mpBackHintGO = BuildText(mpRoot, "MpBackHintText",
+                new Vector2(0f, -360f), new Vector2(760f, 30f),
+                sample.font, Mathf.Max(12, sample.fontSize - 6),
+                new Color(0.68f, 0.68f, 0.68f, 0.82f));
+            MpMenuState.BackHintText = mpBackHintGO.GetComponent<Text>();
+            if (MpMenuState.BackHintText != null)
+                MpMenuState.BackHintText.text = "[ Press Escape or Controller B to go back ]";
 
             // ── Build CreditsPanel ────────────────────────────────────────────
             var credRoot = BuildPanel("CreditsPanel", containerParent,
@@ -673,6 +683,10 @@ namespace CupheadOnline.Patches
         {
             if (MpMenuState.InMpMenu || CreditsState.InCredits) return;
 
+            // Prevent the same Accept press used to leave a sub-menu from
+            // immediately re-opening it on the restored main-menu selection.
+            if (Time.time - _lastBackTime < 0.2f) return;
+
             if (MpMenuState.TimeSinceStartField != null)
             {
                 float t = (float)MpMenuState.TimeSinceStartField.GetValue(__instance);
@@ -994,13 +1008,7 @@ namespace CupheadOnline.Patches
                 _lastBackTime = Time.time;
 
                 PlayMenuSound("level_menu_confirm");
-                // State-aware back:
-                //   - Any active network operation → cancel it, stay in MP menu
-                //   - Idle / error → exit to main menu
-                if (MpMenuState.InputLocked || Plugin.Net.IsConnected || Plugin.Net.IsInLobby)
-                    CancelNetworkOperation();
-                else
-                    ExitMpMenu(inst);
+                ExitMpMenu(inst);
                 return;
             }
 
