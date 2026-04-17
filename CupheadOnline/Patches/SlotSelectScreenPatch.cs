@@ -239,12 +239,13 @@ namespace CupheadOnline.Patches
                 titleT.color    = MpMenuState.SelColor(__instance);
                 titleT.horizontalOverflow = HorizontalWrapMode.Wrap;
                 titleT.verticalOverflow   = VerticalWrapMode.Overflow;
-                titleT.lineSpacing        = 1.1f;
+                titleT.lineSpacing        = 1.2f;
+                titleT.alignment          = TextAnchor.UpperCenter;
             }
             var titleLE = titleGO.GetComponent<LayoutElement>();
             if (titleLE != null)
             {
-                titleLE.preferredHeight = 90f;
+                titleLE.preferredHeight = 120f;
                 titleLE.preferredWidth  = 700f;
             }
 
@@ -256,7 +257,7 @@ namespace CupheadOnline.Patches
                 "cuz me and him wanna play.";
 
             var bodyGO = BuildText(credLayout, "BodyText",
-                Vector2.zero, new Vector2(700f, 110f),
+                Vector2.zero, new Vector2(700f, 160f),
                 sample.font, Mathf.Max(15, sample.fontSize - 3),
                 new Color(0.92f, 0.92f, 0.92f, 1f));
             var bodyT = bodyGO.GetComponent<Text>();
@@ -265,10 +266,11 @@ namespace CupheadOnline.Patches
                 bodyT.text = BODY;
                 bodyT.horizontalOverflow = HorizontalWrapMode.Wrap;
                 bodyT.verticalOverflow   = VerticalWrapMode.Overflow;
-                bodyT.lineSpacing        = 1.2f;
+                bodyT.lineSpacing        = 1.3f;
+                bodyT.alignment          = TextAnchor.UpperCenter;
             }
             var bodyLE = bodyGO.AddComponent<LayoutElement>();
-            bodyLE.preferredHeight = 160f;
+            bodyLE.preferredHeight = 220f;
             bodyLE.preferredWidth  = 700f;
 
             // Hint — child of the VLG
@@ -341,13 +343,14 @@ namespace CupheadOnline.Patches
             rt.sizeDelta        = Vector2.zero;
             var vlg  = go.AddComponent<VerticalLayoutGroup>();
             vlg.childAlignment        = TextAnchor.MiddleCenter;
-            vlg.spacing               = 8f;
+            vlg.spacing               = 24f;
             vlg.childForceExpandWidth = false;
             vlg.childForceExpandHeight= false;
-            vlg.childControlWidth     = true;
-            vlg.childControlHeight    = true;
-            go.AddComponent<ContentSizeFitter>().verticalFit =
-                ContentSizeFitter.FitMode.PreferredSize;
+            vlg.childControlWidth     = false;
+            vlg.childControlHeight    = false;
+            var fitter = go.AddComponent<ContentSizeFitter>();
+            fitter.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
             return go;
         }
 
