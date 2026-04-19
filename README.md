@@ -14,7 +14,7 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 
 - Steam P2P transport built for Cuphead through BepInEx + Harmony
 - Host, join, invite friend, retry last action, and export bug reports
-- Host-led lobby flow with integrated `SAVE SLOT`, `LEAD`, `READY UP`, and `START GAME` actions
+- Host-led lobby flow with integrated `SAVE SLOT`, `LEAD`, and `START GAME` actions
 - Host-authoritative scene syncing for level and menu transitions
 - Save compatibility checks with warnings for mismatched progress, DLC state, or setup
 - Live connection HUD with role, status, session info, and sync warnings
@@ -94,12 +94,12 @@ The mod then patches the game's menu and gameplay flow through Harmony and uses 
 
 1. Host opens `MULTIPLAYER` and creates or joins a Steam lobby.
 2. Once connected, the host picks `SAVE SLOT` and `LEAD` directly inside the multiplayer lobby.
-3. The guest reviews the synced host selection and presses `READY UP`.
+3. The guest stays in the lobby and follows the host automatically.
 4. The host presses `START GAME` from the multiplayer lobby to launch the run.
 
 Character choice follows Cuphead's native co-op model: the host chooses the lead character, and the guest becomes the opposite character. The base game does not expose a separate fully independent guest character picker.
 
-If the guest sees `REQUEST HOST SAVE` instead of `READY UP`, press it once to ask the host for a fresh save sync. The host also rebroadcasts the selected save automatically while waiting for guest ready.
+If the guest sees `REQUEST HOST SAVE`, press it once to ask the host for a fresh save sync. The host also rebroadcasts the selected save automatically while the lobby is open.
 
 ## Building from source
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.4 - 2026-04-19
+
+- Removed the guest ready-up gate from multiplayer starts. The host can now press `START GAME` once a save slot is selected, and the guest follows automatically.
+- Simplified the guest lobby flow so guests wait for the host instead of needing to ready up.
+- Kept `REQUEST HOST SAVE` as a manual fallback when the guest has not received the host's selected save yet.
+
 ## v1.2.3 - 2026-04-19
 
 - Fixed a multiplayer lobby soft-block where the guest could stay stuck on `WAIT FOR SAVE` and never get a `READY UP` action after the host picked a save.

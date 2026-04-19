@@ -1180,9 +1180,7 @@ namespace CupheadOnline.Patches
                 Plugin.Net.IsConnected
                     ? (Plugin.Net.IsHost
                         ? BuildLobbyCharacterLabel()
-                        : (SessionSync.CanGuestToggleReady
-                            ? (SessionSync.IsLocalReady ? "UNREADY" : "READY UP")
-                            : "REQUEST HOST SAVE"))
+                        : (SessionSync.HasTrackedSave ? "WAIT FOR HOST" : "REQUEST HOST SAVE"))
                     : _joinOverlayReady
                         ? "OPEN FRIENDS"
                         : TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId)
@@ -1249,9 +1247,9 @@ namespace CupheadOnline.Patches
                             return SessionSync.CompatibilitySummary;
 
                         return Plugin.Net.IsHost
-                            ? "Choose the save slot for this run here in the lobby. Changing it resyncs the guest and clears their ready check."
+                            ? "Choose the save slot for this run here in the lobby. The host can start as soon as a save is selected."
                             : (SessionSync.HasTrackedSave
-                                ? "The host picked the current save. Review it here, then ready up when prepared."
+                                ? "The host picked the current save. You will follow when the host starts."
                                 : "Connected. Wait for the host to choose a save slot.");
                     }
                     if (Plugin.Net.IsConnected || Plugin.Net.IsInLobby)
@@ -1276,9 +1274,7 @@ namespace CupheadOnline.Patches
                         if (!SessionSync.HasTrackedSave)
                             return "Ask the host for the current save selection again. This fixes missed lobby sync packets.";
 
-                        return SessionSync.IsLocalReady
-                            ? "You are ready. Wait for the host to start the run."
-                            : "Confirm you are ready for the selected save and loadout.";
+                        return "Waiting for the host to start the selected save.";
                     }
                     if (_joinOverlayReady)
                         return "Open Steam Friends and wait for the host invite.";
@@ -1347,7 +1343,7 @@ namespace CupheadOnline.Patches
 
                 case MpMenuState.JoinIndex:
                     if (Plugin.Net.IsConnected)
-                        return Plugin.Net.IsHost || SessionSync.CanGuestToggleReady || !SessionSync.HasTrackedSave;
+                        return Plugin.Net.IsHost || !SessionSync.HasTrackedSave;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
@@ -1361,10 +1357,7 @@ namespace CupheadOnline.Patches
 
                 case MpMenuState.RetryIndex:
                     if (Plugin.Net.IsConnected)
-                        return Plugin.Net.IsHost
-                            && SessionSync.HasTrackedSave
-                            && SessionSync.CompatibilitySeverity < SessionIssueSeverity.Error
-                            && SessionSync.IsRemoteReady;
+                        return Plugin.Net.IsHost && SessionSync.HasTrackedSave;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
@@ -1541,7 +1534,7 @@ namespace CupheadOnline.Patches
                                     MpMenuState.SetStatus(status, animate: false);
                                 }
                                 else
-                                    MpMenuState.SetStatus(SessionSync.ToggleGuestReady(), animate: false);
+                                    MpMenuState.SetStatus("Waiting for the host to start.", animate: false);
                             }
                             else if (!HandleJoinAccept())
                             {
@@ -1554,11 +1547,9 @@ namespace CupheadOnline.Patches
                                 Plugin.Net.IsConnected
                                     ? (Plugin.Net.IsHost
                                         ? (SessionSync.HasTrackedSave
-                                            ? (SessionSync.IsRemoteReady
-                                                ? "Guest is already ready."
-                                                : "Guest still needs to ready up.")
+                                            ? "Start Game is available now."
                                             : "Pick a save first.")
-                                        : SessionSync.CompatibilitySummary)
+                                        : "Waiting for the host to start.")
                                 : _waitingForInvite
                                     ? "Waiting for a Steam invite..."
                                     : Plugin.Net.IsInLobby || Plugin.Net.IsConnected
@@ -1630,7 +1621,7 @@ namespace CupheadOnline.Patches
                 Plugin.Net.IsConnected
                     ? (Plugin.Net.IsHost
                         ? "Guest connected.\nChoose SAVE SLOT and LEAD, then press START GAME."
-                        : "Connected.\nReview the host save and press READY UP when prepared.")
+                        : "Connected.\nWait for the host to choose a save and start.")
                     : Plugin.Net.IsSteamReady ? "Select an option." : Plugin.Net.SteamUnavailableStatus,
                 animate: false);
             if (Plugin.Net != null)
@@ -1892,7 +1883,7 @@ namespace CupheadOnline.Patches
                 MpMenuState.SetStatus(
                     "Selected save slot "
                     + (slotIndex + 1)
-                    + ". Guest ready resets until they confirm the new setup.",
+                    + ". The host can start when ready.",
                     animate: false);
             }
 

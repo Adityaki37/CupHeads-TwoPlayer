@@ -64,14 +64,9 @@ namespace CupheadOnline.Sync
         public static int LocalParries => _localParries;
         public static bool HasTrackedSave => _hasTrackedSave;
         public static ushort SaveRevision => _saveRevision;
-        public static bool IsLocalReady => MultiplayerSession.IsHost ? _hasTrackedSave : _localGuestReady;
-        public static bool IsRemoteReady => MultiplayerSession.IsHost ? _remoteGuestReady : _hasTrackedSave;
-        public static bool CanGuestToggleReady =>
-            Plugin.Net != null
-         && Plugin.Net.IsConnected
-         && !MultiplayerSession.IsHost
-         && _hasTrackedSave
-         && _compatibilitySeverity < SessionIssueSeverity.Error;
+        public static bool IsLocalReady => _hasTrackedSave;
+        public static bool IsRemoteReady => _hasTrackedSave;
+        public static bool CanGuestToggleReady => false;
 
         public static void Update()
         {
@@ -82,7 +77,7 @@ namespace CupheadOnline.Sync
             {
                 if (Time.unscaledTime >= _nextHostSnapshotAt)
                 {
-                    if (_hasTrackedSave && !_remoteGuestReady)
+                    if (_hasTrackedSave && IsTitleScene())
                     {
                         RebroadcastTrackedSaveSelection();
                         BroadcastSelectedSaveProfile();
@@ -262,40 +257,14 @@ namespace CupheadOnline.Sync
                 return false;
             }
 
-            if (_compatibilitySeverity >= SessionIssueSeverity.Error)
-            {
-                reason = _compatibilitySummary;
-                return false;
-            }
-
-            if (!_remoteGuestReady)
-            {
-                reason = "Guest has not readied up for this save yet.";
-                return false;
-            }
-
             return true;
         }
 
         public static string ToggleGuestReady()
         {
-            if (Plugin.Net == null || !Plugin.Net.IsConnected)
-                return "Connect to a host first.";
-            if (MultiplayerSession.IsHost)
-                return "The host is ready automatically when a save is selected.";
-            if (!_hasTrackedSave)
-                return "Wait for the host to pick a save first.";
-            if (_compatibilitySeverity >= SessionIssueSeverity.Error)
-            {
-                if (_localGuestReady)
-                    UpdateLocalGuestReady(false, true);
-                return _compatibilitySummary;
-            }
-
-            UpdateLocalGuestReady(!_localGuestReady, true);
-            return _localGuestReady
-                ? "Ready confirmed. Waiting for the host to start."
-                : "Marked not ready.";
+            return _hasTrackedSave
+                ? "No ready check needed. Waiting for the host to start."
+                : "Waiting for the host to choose a save.";
         }
 
         public static string RequestRecovery()
@@ -426,10 +395,8 @@ namespace CupheadOnline.Sync
                     if (!_hasTrackedSave)
                         return "Guest connected - press Start to choose a save";
                     if (_compatibilitySeverity >= SessionIssueSeverity.Error)
-                        return _compatibilitySummary;
-                    if (!_remoteGuestReady)
-                        return "Save synced - waiting for guest ready";
-                    return "Guest ready - start the run when ready";
+                        return _compatibilitySummary + " - host can still start";
+                    return "Save synced - host can start";
                 }
 
                 if (!_hasTrackedSave)
@@ -439,9 +406,7 @@ namespace CupheadOnline.Sync
                     return _desyncSummary;
                 if (_compatibilitySeverity >= SessionIssueSeverity.Error)
                     return _compatibilitySummary;
-                return _localGuestReady
-                    ? "Ready - waiting for host to start"
-                    : "Save synced - press READY when prepared";
+                return "Save synced - waiting for host to start";
             }
 
             if (Plugin.Net.IsInLobby)
@@ -469,15 +434,15 @@ namespace CupheadOnline.Sync
                 if (!_hasTrackedSave)
                     return "WAITING FOR SAVE";
                 if (_compatibilitySeverity >= SessionIssueSeverity.Error)
-                    return "SAVE BLOCKED";
-                return _remoteGuestReady ? "READY TO START" : "WAITING FOR GUEST";
+                    return "SAVE WARNING";
+                return "READY TO START";
             }
 
             if (!_hasTrackedSave)
                 return "WAITING FOR HOST SAVE";
             if (_compatibilitySeverity >= SessionIssueSeverity.Error)
                 return "SAVE MISMATCH";
-            return _localGuestReady ? "READY" : "NOT READY";
+            return "FOLLOWING HOST";
         }
 
         public static string GetMenuPresenceSummary()
@@ -501,11 +466,7 @@ namespace CupheadOnline.Sync
                 sb.AppendLine();
             }
 
-            sb.Append("Ready: Host ");
-            sb.Append(MultiplayerSession.IsHost ? "YES" : (_hasTrackedSave ? "YES" : "NO"));
-            sb.Append(" | Guest ");
-            sb.Append(MultiplayerSession.IsHost ? (_remoteGuestReady ? "YES" : "NO") : (_localGuestReady ? "YES" : "NO"));
-            sb.AppendLine();
+            sb.AppendLine("Launch: host-controlled");
 
             sb.Append("Players: ");
             sb.Append(MultiplayerSession.ActivePlayerCount);
@@ -556,10 +517,7 @@ namespace CupheadOnline.Sync
                 sb.AppendLine("Save Slot: waiting for host");
             }
 
-            sb.Append("Ready: Host ");
-            sb.Append(MultiplayerSession.IsHost ? "YES" : (_hasTrackedSave ? "YES" : "NO"));
-            sb.Append(" | Guest ");
-            sb.AppendLine(MultiplayerSession.IsHost ? (_remoteGuestReady ? "YES" : "NO") : (_localGuestReady ? "YES" : "NO"));
+            sb.AppendLine("Launch: host-controlled");
 
             sb.Append("Players: ");
             sb.Append(MultiplayerSession.ActivePlayerCount);
@@ -601,8 +559,7 @@ namespace CupheadOnline.Sync
             sb.AppendLine("Stage: " + GetStageSummary());
             sb.AppendLine("Tracked Save: " + (_hasTrackedSave ? (_trackedSaveSlot + 1).ToString() : "(none)"));
             sb.AppendLine("Save Revision: " + _saveRevision);
-            sb.AppendLine("Local Ready: " + IsLocalReady);
-            sb.AppendLine("Remote Ready: " + IsRemoteReady);
+            sb.AppendLine("Ready Gate: disabled");
             sb.AppendLine("Players: " + MultiplayerSession.ActivePlayerCount);
             sb.AppendLine("Local Character: " + MultiplayerSession.GetLocalCharacterName());
             sb.AppendLine("Remote Character: " + MultiplayerSession.GetRemoteCharacterName());
@@ -941,6 +898,11 @@ namespace CupheadOnline.Sync
             {
                 return string.Empty;
             }
+        }
+
+        private static bool IsTitleScene()
+        {
+            return string.Equals(GetActiveSceneName(), "scene_title", StringComparison.OrdinalIgnoreCase);
         }
 
         private static SessionIssueSeverity MaxSeverity(SessionIssueSeverity left, SessionIssueSeverity right)
