@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.2 - 2026-04-19
+
+- Reworked the integrated multiplayer start flow so the host now chooses `SAVE SLOT`, `LEAD`, and `START GAME` directly from the lobby instead of bouncing through Cuphead's solo save menu.
+- Fixed the host save-selection sync so choosing the same save again no longer clears the guest's ready state right before launch.
+- Improved the guest-ready gate so connected sessions can actually start once the host selection is locked in and the guest has readied up.
+- Updated the README to document the new host-led lobby flow and the current character-selection behavior.
+
 ## v1.2.1 - 2026-04-19
 
 - Fixed the Electron installer's BepInEx repair flow so it resolves the current Windows asset names instead of falling back to an outdated 404 URL.

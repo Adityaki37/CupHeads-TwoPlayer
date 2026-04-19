@@ -144,16 +144,27 @@ namespace CupheadOnline.Sync
 
         public static void RecordSelectedSave(ref SaveSlotSyncPacket pkt)
         {
+            bool selectionChanged =
+                !_hasTrackedSave
+             || _trackedSaveSlot != pkt.SlotIndex
+             || _trackedMapScene != (Scenes)pkt.CurrentMapScene
+             || _trackedSaveEmpty != pkt.IsEmpty
+             || (_localSaveProfile.HasValue && _localSaveProfile.Value.Player1IsMugman != pkt.Player1IsMugman);
+
             if (pkt.SaveRevision == 0)
-                pkt.SaveRevision = NextSaveRevision();
+                pkt.SaveRevision = selectionChanged || _saveRevision == 0 ? NextSaveRevision() : _saveRevision;
             else
+            {
+                selectionChanged = selectionChanged || (_saveRevision != 0 && pkt.SaveRevision != _saveRevision);
                 _saveRevision = pkt.SaveRevision;
+            }
 
             _trackedSaveSlot = pkt.SlotIndex;
             _trackedMapScene = (Scenes)pkt.CurrentMapScene;
             _trackedSaveEmpty = pkt.IsEmpty;
             _hasTrackedSave = true;
-            _remoteGuestReady = false;
+            if (selectionChanged)
+                _remoteGuestReady = false;
 
             CaptureLocalSaveProfile(pkt.SlotIndex, pkt.IsEmpty);
             EvaluateCompatibility();
@@ -161,12 +172,21 @@ namespace CupheadOnline.Sync
 
         public static void ApplyRemoteSaveSelection(ref SaveSlotSyncPacket pkt)
         {
+            bool selectionChanged =
+                !_hasTrackedSave
+             || _trackedSaveSlot != pkt.SlotIndex
+             || _trackedMapScene != (Scenes)pkt.CurrentMapScene
+             || _trackedSaveEmpty != pkt.IsEmpty
+             || (_saveRevision != 0 && pkt.SaveRevision != 0 && pkt.SaveRevision != _saveRevision)
+             || (_localSaveProfile.HasValue && _localSaveProfile.Value.Player1IsMugman != pkt.Player1IsMugman);
+
             _trackedSaveSlot = pkt.SlotIndex;
             _trackedMapScene = (Scenes)pkt.CurrentMapScene;
             _trackedSaveEmpty = pkt.IsEmpty;
             _hasTrackedSave = true;
             _saveRevision = pkt.SaveRevision == 0 ? (ushort)1 : pkt.SaveRevision;
-            _localGuestReady = false;
+            if (selectionChanged)
+                _localGuestReady = false;
 
             CaptureLocalSaveProfile(pkt.SlotIndex, pkt.IsEmpty);
             BroadcastGuestSaveProfile();

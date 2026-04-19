@@ -5,6 +5,7 @@ using HarmonyLib;
 using Steamworks;
 using UnityEngine;
 using UnityEngine.UI;
+using CupheadOnline.Net;
 using CupheadOnline.UI;
 using CupheadOnline.Sync;
 using CupheadOnline.Diagnostics;
@@ -1126,6 +1127,42 @@ namespace CupheadOnline.Patches
                 item.text = label;
         }
 
+        static int GetLobbySaveSlotIndex()
+        {
+            return Mathf.Clamp(PlayerData.CurrentSaveFileIndex, 0, 2);
+        }
+
+        static PlayerData GetLobbySaveData()
+        {
+            return PlayerData.GetDataForSlot(GetLobbySaveSlotIndex());
+        }
+
+        static bool GetLobbyPlayer1IsMugman()
+        {
+            var data = GetLobbySaveData();
+            return data != null && data.isPlayer1Mugman;
+        }
+
+        static string GetLobbyLeadCharacterName()
+        {
+            return GetLobbyPlayer1IsMugman() ? "MUGMAN" : "CUPHEAD";
+        }
+
+        static string GetLobbyGuestCharacterName()
+        {
+            return GetLobbyPlayer1IsMugman() ? "CUPHEAD" : "MUGMAN";
+        }
+
+        static string BuildLobbySaveSlotLabel()
+        {
+            return "SAVE SLOT: " + (GetLobbySaveSlotIndex() + 1);
+        }
+
+        static string BuildLobbyCharacterLabel()
+        {
+            return "LEAD: " + GetLobbyLeadCharacterName();
+        }
+
         static void UpdateDynamicMenuLabels()
         {
             string clipboardRaw;
@@ -1134,15 +1171,15 @@ namespace CupheadOnline.Patches
             SetMpItemLabel(
                 MpMenuState.HostIndex,
                 Plugin.Net.IsConnected
-                    ? (Plugin.Net.IsHost ? "OPEN SAVE SLOT" : "WAIT FOR HOST")
+                    ? (Plugin.Net.IsHost
+                        ? BuildLobbySaveSlotLabel()
+                        : (SessionSync.HasTrackedSave ? "HOST SAVE: " + (GetLobbySaveSlotIndex() + 1) : "WAIT FOR HOST"))
                     : "HOST GAME");
             SetMpItemLabel(
                 MpMenuState.JoinIndex,
                 Plugin.Net.IsConnected
                     ? (Plugin.Net.IsHost
-                        ? (SessionSync.HasTrackedSave
-                            ? (SessionSync.IsRemoteReady ? "GUEST READY" : "WAIT READY")
-                            : "WAIT FOR SAVE")
+                        ? BuildLobbyCharacterLabel()
                         : (SessionSync.CanGuestToggleReady
                             ? (SessionSync.IsLocalReady ? "UNREADY" : "READY UP")
                             : "WAIT FOR SAVE"))
@@ -1157,7 +1194,11 @@ namespace CupheadOnline.Patches
                 Plugin.Net.IsConnected
                     ? (Plugin.Net.IsHost ? "SEND RESYNC" : "REQUEST RESYNC")
                     : "INVITE FRIEND");
-            SetMpItemLabel(MpMenuState.RetryIndex, Plugin.Net.GetRetryActionLabel());
+            SetMpItemLabel(
+                MpMenuState.RetryIndex,
+                Plugin.Net.IsConnected && Plugin.Net.IsHost
+                    ? "START GAME"
+                    : Plugin.Net.GetRetryActionLabel());
             SetMpItemLabel(MpMenuState.CopyLobbyIndex, "COPY LOBBY ID");
             SetMpItemLabel(MpMenuState.DiagnosticsIndex, "EXPORT BUG REPORT");
             SetMpItemLabel(MpMenuState.BackIndex,
@@ -1208,8 +1249,10 @@ namespace CupheadOnline.Patches
                             return SessionSync.CompatibilitySummary;
 
                         return Plugin.Net.IsHost
-                            ? "Open Cuphead's normal save slots and choose the file you want to play together."
-                            : "Connected. Wait for the host to choose a save slot.";
+                            ? "Choose the save slot for this run here in the lobby. Changing it resyncs the guest and clears their ready check."
+                            : (SessionSync.HasTrackedSave
+                                ? "The host picked the current save. Review it here, then ready up when prepared."
+                                : "Connected. Wait for the host to choose a save slot.");
                     }
                     if (Plugin.Net.IsConnected || Plugin.Net.IsInLobby)
                         return "Leave the current session before starting a fresh host lobby.";
@@ -1219,11 +1262,11 @@ namespace CupheadOnline.Patches
                     if (Plugin.Net.IsConnected)
                     {
                         if (Plugin.Net.IsHost)
-                            return SessionSync.HasTrackedSave
-                                ? (SessionSync.IsRemoteReady
-                                    ? "Guest is ready. Start the run whenever you want."
-                                    : "Guest still needs to ready up for the selected save.")
-                                : "Pick a save first so the guest can review it.";
+                            return "Choose whether the host starts as "
+                                + GetLobbyLeadCharacterName()
+                                + ". The guest automatically becomes "
+                                + GetLobbyGuestCharacterName()
+                                + ".";
 
                         if (SessionSync.DesyncSeverity >= SessionIssueSeverity.Warning)
                             return SessionSync.DesyncSummary;
@@ -1258,6 +1301,13 @@ namespace CupheadOnline.Patches
                         : "Available once you host a lobby.";
 
                 case MpMenuState.RetryIndex:
+                    if (Plugin.Net.IsConnected && Plugin.Net.IsHost)
+                    {
+                        string startReason;
+                        return SessionSync.CanHostStartRun(out startReason)
+                            ? "Start the run directly from the multiplayer lobby with the selected save and character order."
+                            : startReason;
+                    }
                     return Plugin.Net.CanRetryLastAction
                         ? "Retry the last host or join action without leaving the menu."
                         : "Becomes available after a host or join attempt.";
@@ -1297,7 +1347,7 @@ namespace CupheadOnline.Patches
 
                 case MpMenuState.JoinIndex:
                     if (Plugin.Net.IsConnected)
-                        return !Plugin.Net.IsHost && SessionSync.CanGuestToggleReady;
+                        return Plugin.Net.IsHost || SessionSync.CanGuestToggleReady;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
@@ -1310,6 +1360,11 @@ namespace CupheadOnline.Patches
                     return Plugin.Net.IsConnected ? Plugin.Net.CanRequestRecovery : Plugin.Net.CanInviteFriend;
 
                 case MpMenuState.RetryIndex:
+                    if (Plugin.Net.IsConnected)
+                        return Plugin.Net.IsHost
+                            && SessionSync.HasTrackedSave
+                            && SessionSync.CompatibilitySeverity < SessionIssueSeverity.Error
+                            && SessionSync.IsRemoteReady;
                     return !_waitingForInvite
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
@@ -1348,6 +1403,9 @@ namespace CupheadOnline.Patches
                     _joinOverlayReady = false;
                 ApplyColors(inst);
             }
+
+            if (Plugin.Net.IsConnected && Plugin.Net.IsHost && !SessionSync.HasTrackedSave)
+                PreviewHostLobbySelection(inst, updateStatus: false);
 
             if (Plugin.Net.ShouldForceUnlockUi(Time.realtimeSinceStartup))
             {
@@ -1392,6 +1450,34 @@ namespace CupheadOnline.Patches
                 PlayMenuSound("level_menu_move");
             }
 
+            bool cycleSaveLeft = Plugin.Net.IsConnected
+                && Plugin.Net.IsHost
+                && MpMenuState.MpSelection == MpMenuState.HostIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuLeft);
+            bool cycleSaveRight = Plugin.Net.IsConnected
+                && Plugin.Net.IsHost
+                && MpMenuState.MpSelection == MpMenuState.HostIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuRight);
+            if (cycleSaveLeft || cycleSaveRight)
+            {
+                OnCycleHostSaveSlot(inst, cycleSaveRight ? 1 : -1);
+                PlayMenuSound("level_menu_move");
+            }
+
+            bool cycleLeadLeft = Plugin.Net.IsConnected
+                && Plugin.Net.IsHost
+                && MpMenuState.MpSelection == MpMenuState.JoinIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuLeft);
+            bool cycleLeadRight = Plugin.Net.IsConnected
+                && Plugin.Net.IsHost
+                && MpMenuState.MpSelection == MpMenuState.JoinIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuRight);
+            if (cycleLeadLeft || cycleLeadRight)
+            {
+                OnToggleHostLeadCharacter(inst);
+                PlayMenuSound("level_menu_move");
+            }
+
             bool cycleLeft = MpMenuState.MpSelection == MpMenuState.ColorIndex
                 && MpMenuState.Btn(inst, CupheadButton.MenuLeft);
             bool cycleRight = MpMenuState.MpSelection == MpMenuState.ColorIndex
@@ -1425,7 +1511,7 @@ namespace CupheadOnline.Patches
                         if (IsItemAvailable(MpMenuState.HostIndex))
                         {
                             if (Plugin.Net.IsConnected && Plugin.Net.IsHost)
-                                OpenHostSaveSelect(inst);
+                                OnCycleHostSaveSlot(inst, 1);
                             else
                                 OnHostGame();
                         }
@@ -1433,7 +1519,7 @@ namespace CupheadOnline.Patches
                             MpMenuState.SetStatus(
                                 Plugin.Net.IsConnected
                                     ? (Plugin.Net.IsHost
-                                        ? "Open the save slots when you are ready."
+                                        ? "Only the host can choose the multiplayer save."
                                         : "Waiting for the host to choose a save slot.")
                                     : Plugin.Net.IsInLobby
                                         ? "Leave the current session before hosting again."
@@ -1446,7 +1532,10 @@ namespace CupheadOnline.Patches
                         {
                             if (Plugin.Net.IsConnected)
                             {
-                                MpMenuState.SetStatus(SessionSync.ToggleGuestReady(), animate: false);
+                                if (Plugin.Net.IsHost)
+                                    OnToggleHostLeadCharacter(inst);
+                                else
+                                    MpMenuState.SetStatus(SessionSync.ToggleGuestReady(), animate: false);
                             }
                             else if (!HandleJoinAccept())
                             {
@@ -1491,7 +1580,10 @@ namespace CupheadOnline.Patches
                         break;
 
                     case MpMenuState.RetryIndex:
-                        OnRetryLast();
+                        if (Plugin.Net.IsConnected && Plugin.Net.IsHost)
+                            OnStartGame(inst);
+                        else
+                            OnRetryLast();
                         break;
 
                     case MpMenuState.CopyLobbyIndex:
@@ -1531,13 +1623,15 @@ namespace CupheadOnline.Patches
             MpMenuState.SetStatus(
                 Plugin.Net.IsConnected
                     ? (Plugin.Net.IsHost
-                        ? "Guest connected.\nSelect OPEN SAVE SLOT to choose a file."
-                        : "Connected.\nWaiting for the host to choose a save slot.")
+                        ? "Guest connected.\nChoose SAVE SLOT and LEAD, then press START GAME."
+                        : "Connected.\nReview the host save and press READY UP when prepared.")
                     : Plugin.Net.IsSteamReady ? "Select an option." : Plugin.Net.SteamUnavailableStatus,
                 animate: false);
             if (Plugin.Net != null)
                 Plugin.Net.NotifyLocalAppearanceChanged();
             if (MpMenuState.PresenceText != null) MpMenuState.PresenceText.text = "";
+            if (Plugin.Net.IsConnected && Plugin.Net.IsHost && !SessionSync.HasTrackedSave)
+                PreviewHostLobbySelection(inst, updateStatus: false);
             UpdateDynamicMenuLabels();
             UpdateSteamBadge();
             UpdateHintText();
@@ -1760,6 +1854,111 @@ namespace CupheadOnline.Patches
         }
 
         // ── Actions ──────────────────────────────────────────────────────────
+
+        static void RefreshLobbySelectionUi(SlotSelectScreen inst)
+        {
+            _lastPresence = null;
+            UpdateDynamicMenuLabels();
+            UpdatePresenceText();
+            UpdateHintText();
+            SlotSelectAwakePatch.RefreshMpLayout();
+            ApplyColors(inst);
+        }
+
+        static bool PreviewHostLobbySelection(SlotSelectScreen inst, bool updateStatus)
+        {
+            int slotIndex = GetLobbySaveSlotIndex();
+            bool player1IsMugman = GetLobbyPlayer1IsMugman();
+
+            SaveSlotSyncPacket packet;
+            string reason;
+            if (!SlotSelectEnterGamePatch.TryBroadcastLobbySelection(inst, slotIndex, player1IsMugman, out packet, out reason))
+            {
+                if (updateStatus)
+                    MpMenuState.SetStatus(reason, animate: false);
+                return false;
+            }
+
+            RefreshLobbySelectionUi(inst);
+
+            if (updateStatus)
+            {
+                MpMenuState.SetStatus(
+                    "Selected save slot "
+                    + (slotIndex + 1)
+                    + ". Guest ready resets until they confirm the new setup.",
+                    animate: false);
+            }
+
+            return true;
+        }
+
+        static void OnCycleHostSaveSlot(SlotSelectScreen inst, int direction)
+        {
+            if (!Plugin.Net.IsConnected || !Plugin.Net.IsHost)
+            {
+                MpMenuState.SetStatus("Connect a guest before choosing the multiplayer save.", animate: false);
+                return;
+            }
+
+            int nextSlot = GetLobbySaveSlotIndex() + direction;
+            if (nextSlot < 0) nextSlot = 2;
+            if (nextSlot > 2) nextSlot = 0;
+
+            PlayerData.CurrentSaveFileIndex = nextSlot;
+            PreviewHostLobbySelection(inst, updateStatus: true);
+        }
+
+        static void OnToggleHostLeadCharacter(SlotSelectScreen inst)
+        {
+            if (!Plugin.Net.IsConnected || !Plugin.Net.IsHost)
+            {
+                MpMenuState.SetStatus("Only the host can choose the character order.", animate: false);
+                return;
+            }
+
+            var data = GetLobbySaveData();
+            if (data == null)
+            {
+                MpMenuState.SetStatus("That save slot is unavailable right now.", animate: false);
+                return;
+            }
+
+            data.isPlayer1Mugman = !data.isPlayer1Mugman;
+            if (!PreviewHostLobbySelection(inst, updateStatus: false))
+                return;
+
+            MpMenuState.SetStatus(
+                "Host will play "
+                + GetLobbyLeadCharacterName()
+                + ". Guest will play "
+                + GetLobbyGuestCharacterName()
+                + ".",
+                animate: false);
+        }
+
+        static void OnStartGame(SlotSelectScreen inst)
+        {
+            if (!Plugin.Net.IsConnected || !Plugin.Net.IsHost)
+            {
+                MpMenuState.SetStatus("Only the host can start the run.", animate: false);
+                return;
+            }
+
+            string reason;
+            if (!SlotSelectEnterGamePatch.TryStartFromLobbySelection(
+                    inst,
+                    GetLobbySaveSlotIndex(),
+                    GetLobbyPlayer1IsMugman(),
+                    out reason))
+            {
+                MpMenuState.SetStatus(reason, animate: false);
+                return;
+            }
+
+            MpMenuState.InMpMenu = false;
+            MpMenuState.InputLocked = false;
+        }
 
         static void OnCyclePlayerColor(int direction)
         {
