@@ -36,6 +36,13 @@ namespace CupheadOnline.Sync
         public static void Apply(byte participantId, InputFramePacket pkt)
         {
             var state = GetOrCreateState(participantId);
+            if (state.HasData && state.Current.Tick == pkt.Tick)
+            {
+                state.Current = pkt;
+                state.StallFrames = 0;
+                return;
+            }
+
             if (state.HasData)
                 state.Previous = state.Current;
             else

@@ -99,9 +99,6 @@ namespace CupheadOnline.Patches
 
             var packet = BuildMapStatePacket(player, __instance);
             Plugin.Net.SendPlayerState(ref packet);
-
-            if (MultiplayerSession.IsClient)
-                SendMapInputFrame(player);
         }
 
         static PlayerStatePacket BuildMapStatePacket(MapPlayerController player, MapPlayerMotor motor)
@@ -139,53 +136,6 @@ namespace CupheadOnline.Patches
                 AnimState = (byte)player.state,
                 Tick = MultiplayerSession.Tick,
             };
-        }
-
-        static void SendMapInputFrame(MapPlayerController player)
-        {
-            if (player.input == null)
-                return;
-
-            var input = player.input;
-            uint buttons = 0;
-            TryPackButton(input, CupheadButton.Jump, ref buttons);
-            TryPackButton(input, CupheadButton.Shoot, ref buttons);
-            TryPackButton(input, CupheadButton.Super, ref buttons);
-            TryPackButton(input, CupheadButton.Dash, ref buttons);
-            TryPackButton(input, CupheadButton.Lock, ref buttons);
-            TryPackButton(input, CupheadButton.SwitchWeapon, ref buttons);
-            TryPackButton(input, CupheadButton.Pause, ref buttons);
-            TryPackButton(input, CupheadButton.Accept, ref buttons);
-            TryPackButton(input, CupheadButton.Cancel, ref buttons);
-            TryPackButton(input, CupheadButton.EquipMenu, ref buttons);
-            TryPackButton(input, CupheadButton.MenuUp, ref buttons);
-            TryPackButton(input, CupheadButton.MenuDown, ref buttons);
-            TryPackButton(input, CupheadButton.MenuLeft, ref buttons);
-            TryPackButton(input, CupheadButton.MenuRight, ref buttons);
-
-            var packet = new InputFramePacket
-            {
-                AxisX = input.GetAxis(PlayerInput.Axis.X),
-                AxisY = input.GetAxis(PlayerInput.Axis.Y),
-                Buttons = buttons,
-                Tick = MultiplayerSession.Tick,
-            };
-            Plugin.Net.SendInputFrame(ref packet);
-        }
-
-        static void TryPackButton(PlayerInput input, CupheadButton button, ref uint bits)
-        {
-            if ((int)button < 0 || (int)button >= 32)
-                return;
-
-            try
-            {
-                if (input.GetButton(button))
-                    bits |= 1u << (int)button;
-            }
-            catch
-            {
-            }
         }
 
         static void ApplyRemoteMapState(MapPlayerMotor motor, byte participantId)

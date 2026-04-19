@@ -111,40 +111,14 @@ namespace CupheadOnline.Patches
         }
 
         /// <summary>
-        /// Client-specific: also build and send the local input frame so the host
-        /// can drive PlayerTwo's motor authoritatively.
+        /// PlayerState is still replicated from gameplay here. InputFrames now
+        /// come from the global per-frame pump so menus and gameplay share one
+        /// consistent input stream.
         /// </summary>
         static void SendInputFrameAndState(LevelPlayerMotor motor, LevelPlayerController player,
                                            ref PlayerStatePacket statePkt)
         {
             Plugin.Net.SendPlayerState(ref statePkt);
-
-            var input   = player.input;
-            if (input == null) return;
-
-            uint buttons = 0;
-            // Pack the subset of buttons that affect gameplay
-            TryPackButton(input, CupheadButton.Jump,         ref buttons);
-            TryPackButton(input, CupheadButton.Shoot,        ref buttons);
-            TryPackButton(input, CupheadButton.Super,        ref buttons);
-            TryPackButton(input, CupheadButton.Dash,         ref buttons);
-            TryPackButton(input, CupheadButton.Lock,         ref buttons);
-            TryPackButton(input, CupheadButton.SwitchWeapon, ref buttons);
-
-            var inPkt = new InputFramePacket
-            {
-                AxisX   = input.GetAxis(PlayerInput.Axis.X),
-                AxisY   = input.GetAxis(PlayerInput.Axis.Y),
-                Buttons = buttons,
-                Tick    = MultiplayerSession.Tick,
-            };
-            Plugin.Net.SendInputFrame(ref inPkt);
-        }
-
-        static void TryPackButton(PlayerInput input, CupheadButton btn, ref uint bits)
-        {
-            if (input.GetButton(btn))
-                bits |= 1u << (int)btn;
         }
 
         /// <summary>

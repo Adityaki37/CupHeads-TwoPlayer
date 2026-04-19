@@ -26,13 +26,17 @@ namespace CupheadOnline.Net
 
                 case PacketType.InputFrame:
                 {
-                    // Only the HOST receives InputFrames from the client
-                    if (!MultiplayerSession.IsHost) break;
+                    if (!MultiplayerSession.IsActive) break;
                     var pkt = new InputFramePacket();
                     pkt.Read(r);
                     byte participantId = sourceParticipantId == byte.MaxValue
                         ? (byte)MultiplayerSession.GetPrimaryRemoteGameplayId()
                         : sourceParticipantId;
+
+                    if (participantId <= (byte)PlayerId.PlayerTwo
+                     && !MultiplayerSession.IsNetworkControlledParticipant(participantId))
+                        break;
+
                     RemoteInputDriver.Apply(participantId, pkt);
                     break;
                 }

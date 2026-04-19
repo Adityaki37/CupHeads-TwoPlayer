@@ -212,6 +212,7 @@ namespace CupheadOnline
             Net?.Poll();
             MultiplayerSession.EnsureCupheadMultiplayerState();
             ClientInputFramePump.Update();
+            LoadoutReplicator.Update();
             EnemySyncManager.HostTick();
             ExtraRemoteAvatarManager.Update();
             ExtraParticipantDamageBridge.Update();
@@ -278,6 +279,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.8";
+        public const string VERSION = "1.2.9";
     }
 }

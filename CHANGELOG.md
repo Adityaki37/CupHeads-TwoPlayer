@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.9 - 2026-04-19
+
+- Reworked live input replication so both host and guest continuously mirror gameplay and menu inputs through a single packet stream instead of conflicting map, level, and UI send paths.
+- Fixed internal two-player menu drift by accepting remote input frames on both peers, which keeps equip cards, prompts, and shop-style menus in sync and lets both sides back out cleanly.
+- Applied remote loadouts directly to the active save/loadout state while connected, so map-side character cards and menu selections start from the same data on both machines.
+
 ## v1.2.8 - 2026-04-19
 
 - Added universal local input routing so the active player can switch between keyboard and controller at any time during maps, levels, equip cards, and menus.

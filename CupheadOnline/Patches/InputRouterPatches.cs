@@ -23,6 +23,13 @@ namespace CupheadOnline.Patches
             RewiredPlayerType == null ? null : AccessTools.Method(RewiredPlayerType, "GetButtonUp", new[] { typeof(int) });
 
         static int _rawQueryDepth;
+        static uint _nextInputTick = 1;
+
+        static UniversalInputRouter()
+        {
+            MultiplayerSession.OnSessionStarted += ResetInputSequence;
+            MultiplayerSession.OnSessionEnded += ResetInputSequence;
+        }
 
         internal static bool IsRawQuery => _rawQueryDepth > 0;
 
@@ -147,8 +154,27 @@ namespace CupheadOnline.Patches
                 AxisX = axisX,
                 AxisY = axisY,
                 Buttons = buttons,
-                Tick = (uint)Mathf.Max(0, Time.frameCount),
+                Tick = NextInputTick(),
             };
+        }
+
+        static uint NextInputTick()
+        {
+            unchecked
+            {
+                uint next = _nextInputTick++;
+                if (next == 0)
+                {
+                    _nextInputTick = 1;
+                    next = _nextInputTick++;
+                }
+                return next;
+            }
+        }
+
+        static void ResetInputSequence()
+        {
+            _nextInputTick = 1;
         }
 
         static void Pack(CupheadButton button, ref uint buttons)
@@ -210,7 +236,7 @@ namespace CupheadOnline.Patches
     {
         internal static void Update()
         {
-            if (!MultiplayerSession.IsActive || !MultiplayerSession.IsClient)
+            if (!MultiplayerSession.IsActive)
                 return;
             if (Plugin.Net == null || !Plugin.Net.IsConnected)
                 return;
@@ -286,7 +312,7 @@ namespace CupheadOnline.Patches
             if (MultiplayerSession.IsLocalPlayer(owner)
              && UniversalInputRouter.TryGetLocalButton(actionId, down, up, out value))
             {
-                result = value;
+                result = result || value;
             }
         }
     }
