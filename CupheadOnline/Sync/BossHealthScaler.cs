@@ -93,6 +93,13 @@ namespace CupheadOnline.Sync
 
         public static void Update()
         {
+            if (!Plugin.BossHpScalingEnabled)
+            {
+                _lastPlayerCount = 1;
+                _lastMultiplier = 1f;
+                return;
+            }
+
             string sceneName = GetActiveSceneName();
             if (!string.Equals(sceneName, _lastSceneName, StringComparison.OrdinalIgnoreCase))
                 ResetForScene(sceneName);
@@ -100,8 +107,6 @@ namespace CupheadOnline.Sync
             _lastPlayerCount = EffectivePlayerCount;
             _lastMultiplier = CurrentMultiplier;
 
-            if (!Plugin.BossHpScalingEnabled)
-                return;
             if (Level.Current == null || Level.Current.LevelType != Level.Type.Battle)
                 return;
             if (_lastMultiplier <= 1.0001f)

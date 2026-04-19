@@ -391,7 +391,7 @@ namespace CupheadOnline.Net
             // Dispatch to PacketDispatcher
             using (var ms = new MemoryStream(data, offset, data.Length - offset, false))
             using (var r  = new BinaryReader(ms))
-                PacketDispatcher.Dispatch(ptype, r);
+                PacketDispatcher.Dispatch(ptype, r, byte.MaxValue);
         }
 
         // ── Connection established callback ───────────────────────────────────

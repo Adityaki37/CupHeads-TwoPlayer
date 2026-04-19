@@ -5,6 +5,7 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using CupheadOnline.Net;
 using CupheadOnline.UI;
 using CupheadOnline.Patches;
@@ -30,6 +31,7 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgShowPauseSessionPanel;
         static ConfigEntry<bool> _cfgBossHpScalingEnabled;
         static ConfigEntry<float> _cfgBossHpPerExtraPlayer;
+        static ConfigEntry<int> _cfgPreferredPlayerColor;
 
         public static bool ShowConnectionHud => _cfgShowConnectionHud == null || _cfgShowConnectionHud.Value;
         public static bool VerboseLoggingEnabled => _cfgVerboseLogging != null && _cfgVerboseLogging.Value;
@@ -39,6 +41,8 @@ namespace CupheadOnline
         public static bool BossHpScalingEnabled => _cfgBossHpScalingEnabled != null && _cfgBossHpScalingEnabled.Value;
         public static float BossHpPerExtraPlayer =>
             _cfgBossHpPerExtraPlayer == null ? 0.35f : Mathf.Max(0f, _cfgBossHpPerExtraPlayer.Value);
+        public static int PreferredPlayerColorSelection =>
+            _cfgPreferredPlayerColor == null ? PlayerColorSync.AutoSelection : PlayerColorSync.NormalizeSelection(_cfgPreferredPlayerColor.Value);
 
         // ──────────────────────────────────────────────────────────────────────
         //  Unity lifecycle
@@ -47,7 +51,8 @@ namespace CupheadOnline
         {
             Instance = this;
             Log      = Logger;
-            Log.LogInfo("CupheadOnline " + PluginInfo.VERSION + " loading\u2026");
+            Log.LogInfo("CupHeads " + PluginInfo.VERSION + " loading\u2026");
+            SceneManager.sceneLoaded += OnSceneLoaded;
 
             _cfgShowConnectionHud = Config.Bind("UI", "ShowConnectionHud", true,
                 "Show the in-game connection HUD with status and ping quality.");
@@ -63,6 +68,8 @@ namespace CupheadOnline
                 "Scale battle-level boss HP by connected player count. Disabled by default.");
             _cfgBossHpPerExtraPlayer = Config.Bind("Balance", "BossHpPerExtraPlayer", 0.35f,
                 "Extra boss HP added per extra active player. Example: 0.35 means 2 players = 1.35x HP.");
+            _cfgPreferredPlayerColor = Config.Bind("Cosmetics", "PreferredPlayerColor", PlayerColorSync.AutoSelection,
+                "Lobby and in-game player color. 0 = Auto, 1 = Classic, 2+ = fixed tint.");
 
             // Networking manager — Steam P2P transport (lobby + invite flow)
             Net = new SteamNetManager();
@@ -108,6 +115,51 @@ namespace CupheadOnline
             PatchSafe(harmony, typeof(PlayerLevelInitPatch));
             PatchSafe(harmony, typeof(StatsLevelInitPatch));
             PatchSafe(harmony, typeof(LevelStartPatch));
+            PatchSafe(harmony, typeof(PlayerDeathStatePatch));
+            PatchSafe(harmony, typeof(PlayerReviveStatePatch));
+            PatchSafe(harmony, typeof(PlayerStatsInitialStatusPatch));
+            PatchSafe(harmony, typeof(PlayerStatsHealthChangedPatch));
+            PatchSafe(harmony, typeof(PlayerDeathEffectReviveOutOfFramePatch));
+            PatchSafe(harmony, typeof(PlayerDeathEffectExtraVisualStartPatch));
+            PatchSafe(harmony, typeof(PlayerDeathEffectExtraVisualParryPatch));
+            PatchSafe(harmony, typeof(PlayerDeathEffectExtraVisualParryAnimPatch));
+            PatchSafe(harmony, typeof(ExtraRemoteAvatarAwakePatch));
+            PatchSafe(harmony, typeof(PlayerManagerCenterPatch));
+            PatchSafe(harmony, typeof(PlayerManagerCameraCenterPatch));
+            PatchSafe(harmony, typeof(PlayerManagerTopPlayerPositionPatch));
+            PatchSafe(harmony, typeof(PlayerManagerGetNextPatch));
+            PatchSafe(harmony, typeof(PlayerManagerGetRandomPatch));
+            PatchSafe(harmony, typeof(PlayerManagerGetFirstPatch));
+            PatchSafe(harmony, typeof(PlayerManagerCurrentPatch));
+            PatchSafe(harmony, typeof(PlayerManagerCountPatch));
+            PatchSafe(harmony, typeof(PlayerManagerGetAllPlayersPatch));
+            PatchSafe(harmony, typeof(PlayerManagerBothPlayersActivePatch));
+            PatchSafe(harmony, typeof(CupheadLevelCameraPathPatch));
+            PatchSafe(harmony, typeof(PlatformingLevelEnemySpawnerPatch));
+            PatchSafe(harmony, typeof(PlatformingLevelPitMoveTriggerPatch));
+            PatchSafe(harmony, typeof(ForestPlatformingLevelChomperSpawnerPatch));
+            PatchSafe(harmony, typeof(AbstractPlatformingLevelEnemyTriggerPatch));
+            PatchSafe(harmony, typeof(LevelPitExtraParticipantPatch));
+            PatchSafe(harmony, typeof(PlatformingLevelShootingEnemyRangePatch));
+            PatchSafe(harmony, typeof(PlatformingLevelShootingEnemyVolumesPatch));
+            PatchSafe(harmony, typeof(PlatformingLevelShootingEnemyShootPatch));
+            PatchSafe(harmony, typeof(MountainPlatformingLevelElevatorHandlerStartPatch));
+            PatchSafe(harmony, typeof(CircusPlatformingLevelTrampolineSleepPatch));
+            PatchSafe(harmony, typeof(MountainPlatformingLevelScaleStartPatch));
+            PatchSafe(harmony, typeof(SnowCultLevelPlatformExtraBouncePatch));
+            PatchSafe(harmony, typeof(PlatformingLevelExitExtraParticipantPatch));
+            PatchSafe(harmony, typeof(LevelCoinExtraCollectorPatch));
+            PatchSafe(harmony, typeof(PirateLevelBarrelExtraTriggerPatch));
+            PatchSafe(harmony, typeof(AbstractLevelInteractiveEntityExtraPatch));
+            PatchSafe(harmony, typeof(HouseLevelExitExtraPatch));
+            PatchSafe(harmony, typeof(RobotLevelRobotHeadPrimaryPatch));
+            PatchSafe(harmony, typeof(ChessKnightLevelInitPatch3P));
+            PatchSafe(harmony, typeof(ChessKnightCheckTauntPatch3P));
+            PatchSafe(harmony, typeof(ChessKnightShouldBackDashPatch3P));
+            PatchSafe(harmony, typeof(ChessBishopFixedUpdatePatch3P));
+            PatchSafe(harmony, typeof(ChessBishopFindVerticalAnglePatch3P));
+            PatchSafe(harmony, typeof(ChessBishopFindHorizontalPositionPatch3P));
+            PatchSafe(harmony, typeof(SallyMeteorParryPatch3P));
 
             // Movement / input sync
             PatchSafe(harmony, typeof(PlayerMotorPatch));
@@ -149,22 +201,36 @@ namespace CupheadOnline
             MainThreadQueue.Drain();
             Net?.Poll();
             EnemySyncManager.HostTick();
+            ExtraRemoteAvatarManager.Update();
+            ExtraParticipantDamageBridge.Update();
+            ExtraParticipantTracker.Update();
+            ExtraParticipantReviveVisuals.Update();
+            PlayerColorSync.Update();
             BossHealthScaler.Update();
             SessionSync.Update();
             SessionPausePanel.Ensure();
         }
 
-        void OnLevelWasLoaded(int level)
+        void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
-            // Reset the injection flag so re-entering the title screen injects again
             UI.MultiplayerMenuInjector.ResetOnSceneChange();
         }
 
         void OnDestroy()
         {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
             Net?.Dispose();
             MultiplayerSession.End();
+            PlayerColorSync.Reset();
             BossHealthScaler.Reset();
+        }
+
+        public static void SetPreferredPlayerColorSelection(int selection)
+        {
+            if (_cfgPreferredPlayerColor == null)
+                return;
+
+            _cfgPreferredPlayerColor.Value = PlayerColorSync.NormalizeSelection(selection);
         }
 
         public static void LogVerbose(string msg)
@@ -176,7 +242,7 @@ namespace CupheadOnline
         public static string BuildDiagnosticsReport()
         {
             string nl = Environment.NewLine;
-            string report = "CupheadOnline Diagnostics" + nl
+            string report = "CupHeads Diagnostics" + nl
                           + "Version: " + PluginInfo.VERSION + nl
                           + "HUD Enabled: " + ShowConnectionHud + nl
                           + "Verbose Logging: " + VerboseLoggingEnabled + nl
@@ -199,7 +265,7 @@ namespace CupheadOnline
     internal static class PluginInfo
     {
         public const string GUID    = "com.cupheadonline.mod";
-        public const string NAME    = "CupheadOnline";
+        public const string NAME    = "CupHeads";
         public const string VERSION = "1.2.0";
     }
 }

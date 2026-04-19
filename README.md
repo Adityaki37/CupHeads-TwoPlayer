@@ -13,22 +13,31 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 ### Multiplayer
 
 - Steam P2P transport built for Cuphead through BepInEx + Harmony
-- Host, join, invite friend, retry last action, and copy lobby diagnostics
+- Host, join, invite friend, retry last action, and export bug reports
 - Host-led save slot flow so the host can open a file and pull the guest into the same run
 - Host-authoritative scene syncing for level and menu transitions
-- Save compatibility checks with warnings for mismatched progress or setup
+- Save compatibility checks with warnings for mismatched progress, DLC state, or setup
 - Live connection HUD with role, status, session info, and sync warnings
 - In-game session panel with `F8` toggle for quick diagnostics and session state
 - Optional boss HP scaling per extra active player, configurable in BepInEx and disabled by default
-- Recovery and resync tools for active sessions, including exported bug-report bundles
+- Recovery and resync tools for active sessions, including exported diagnostics bundles
 
 ### Menu and UX
 
-- Custom multiplayer menu injected into Slot Select
+- Lobby-style multiplayer screen injected into Slot Select
+- Cleaner roster, status, and action layout with Steam readiness shown in-menu
+- Runtime player color swatches with in-game tinting and no sprite-file recolor work
 - Dedicated credits screen
 - Clear Steam readiness and connection status messaging
 - Clipboard helpers for lobby IDs and diagnostics
 - Better retry and reconnect guidance when Steam sessions fail
+
+### Experimental Expanded Sessions
+
+- Larger Steam lobbies with tracked extra participants beyond the vanilla two-player setup
+- Runtime extra-player avatars, extra-participant HUD summaries, and experimental revive / damage bridges
+- Shared targeting, camera, and several platforming / boss hooks patched to be more 3+-aware
+- This part of the mod is still experimental: Cuphead has many bespoke scene scripts, so not every fight or event is guaranteed to behave perfectly with extra active participants
 
 ### Characters and DLC
 
@@ -38,8 +47,9 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 
 ## Current Gameplay Limit
 
-- Active gameplay is still capped by Cuphead's native two-player runtime, so live runs remain `PlayerOne` + `PlayerTwo`
-- The current mod architecture supports richer lobby/session flow, but it does not turn Cuphead into a true unlimited-player game
+- Vanilla Cuphead is still deeply built around `PlayerOne` and `PlayerTwo`
+- CupHeads now includes experimental extra-participant support, but it does not magically turn every Cuphead scene into a fully solved unlimited-player game
+- The more custom a boss, cutscene, or scripted event is, the more likely it still needs scene-specific work
 
 ### Installer
 
@@ -60,7 +70,7 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 
 ## Quick Start
 
-1. Download `Cupheads.exe` from [Releases](https://github.com/Germanized/CupHeads/releases).
+1. Download `CupHeads.exe` from [Releases](https://github.com/Germanized/CupHeads/releases).
 2. Run the installer.
 3. Let it detect your Cuphead folder, or browse to it manually.
 4. Click Install.
@@ -97,7 +107,7 @@ dotnet build .\CupheadOnline\CupheadOnline.csproj -c Release
 That produces:
 
 - `dist\CupheadOnline.dll`
-- `dist\Cupheads.exe`
+- `dist\CupHeads.exe`
 
 ### Build the installer manually
 
@@ -107,7 +117,7 @@ npm install
 npm run dist
 ```
 
-The packaged installer is written to `CupheadInstaller\dist\Cupheads.exe`.
+The packaged installer is written to `CupheadInstaller\dist\CupHeads.exe`.
 
 ## Tech stack
 
@@ -120,6 +130,7 @@ The packaged installer is written to `CupheadInstaller\dist\Cupheads.exe`.
 
 - Germanized and Sh0kr for the mod
 - Made for Daniel
+- Special thanks to Internallinked
 - BepInEx for the mod framework
 - Harmony for patching
 - Electron for the installer shell

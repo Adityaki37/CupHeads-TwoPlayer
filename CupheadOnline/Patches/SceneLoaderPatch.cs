@@ -13,6 +13,8 @@ namespace CupheadOnline.Patches
             EnemySyncManager.Reset();
             EnemyRegistry.Clear();
             RemotePlayer.Reset();
+            RemoteInputDriver.Reset();
+            ExtraParticipantTracker.Reset();
         }
     }
 

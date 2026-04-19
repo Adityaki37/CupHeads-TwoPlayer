@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using Steamworks;
@@ -40,11 +41,12 @@ namespace CupheadOnline.Patches
     {
         internal const int HostIndex       = 0;
         internal const int JoinIndex       = 1;
-        internal const int InviteIndex     = 2;
-        internal const int RetryIndex      = 3;
-        internal const int CopyLobbyIndex  = 4;
-        internal const int DiagnosticsIndex= 5;
-        internal const int BackIndex       = 6;
+        internal const int ColorIndex      = 2;
+        internal const int InviteIndex     = 3;
+        internal const int RetryIndex      = 4;
+        internal const int CopyLobbyIndex  = 5;
+        internal const int DiagnosticsIndex= 6;
+        internal const int BackIndex       = 7;
 
         internal static bool             InMpMenu;
         internal static int              MpSelection;
@@ -64,6 +66,8 @@ namespace CupheadOnline.Patches
         internal static Text             HintText;
         internal static Text             BackHintText;
         internal static Text             MainFooterText;
+        internal static Text             ColorDetailText;
+        internal static Text[]           ColorSwatches;
         internal static SlotSelectScreen ScreenInstance;
 
         // Status animation
@@ -116,6 +120,8 @@ namespace CupheadOnline.Patches
             HintText       = null;
             BackHintText   = null;
             MainFooterText = null;
+            ColorDetailText = null;
+            ColorSwatches = null;
             ScreenInstance = null;
             StatusBase     = "";
             StatusAnimate  = false;
@@ -217,20 +223,107 @@ namespace CupheadOnline.Patches
             MpMenuState.MpContainer   = mpRoot;
             MpMenuState.MpCanvasGroup = mpCg;
 
-            var mpLayout   = BuildLayout(mpRoot, new Vector2(0f, 54f), 12f);
+            var sepiaFill = new Color(0.08f, 0.07f, 0.05f, 0.58f);
+            var sepiaOutline = new Color(0.78f, 0.62f, 0.34f, 0.42f);
+            var softText = new Color(0.90f, 0.88f, 0.82f, 0.96f);
+            var subtleText = new Color(0.72f, 0.70f, 0.66f, 0.88f);
+            const float fullWidth = 820f;
+            const float sideCardWidth = 398f;
+            const float sideCardHeight = 400f;
+            const float sideGap = 24f;
+            const float sideContentWidth = 338f;
+            float sideCardX = (sideCardWidth + sideGap) * 0.5f;
+
+            var headerCard = BuildCard(mpRoot, "LobbyHeaderCard",
+                new Vector2(0f, 228f), new Vector2(fullWidth, 68f),
+                new Color(0.09f, 0.07f, 0.05f, 0.66f), sepiaOutline);
+            var actionCard = BuildCard(mpRoot, "LobbyActionCard",
+                new Vector2(-sideCardX, -12f), new Vector2(sideCardWidth, sideCardHeight),
+                sepiaFill, sepiaOutline);
+            var rosterCard = BuildCard(mpRoot, "LobbyRosterCard",
+                new Vector2(sideCardX, -12f), new Vector2(sideCardWidth, sideCardHeight),
+                sepiaFill, sepiaOutline);
+            var statusCard = BuildCard(mpRoot, "LobbyStatusCard",
+                new Vector2(0f, -290f), new Vector2(fullWidth, 92f),
+                new Color(0.09f, 0.07f, 0.05f, 0.62f), sepiaOutline);
+
+            var lobbyTitleGO = BuildText(headerCard, "LobbyTitle",
+                new Vector2(-170f, 10f), new Vector2(420f, 34f),
+                sample.font, sample.fontSize + 3,
+                new Color(0.97f, 0.93f, 0.84f, 0.98f));
+            var lobbyTitleText = lobbyTitleGO.GetComponent<Text>();
+            if (lobbyTitleText != null)
+            {
+                lobbyTitleText.text = "MULTIPLAYER LOBBY";
+                lobbyTitleText.alignment = TextAnchor.MiddleLeft;
+            }
+
+            var subtitleGO = BuildText(headerCard, "LobbySubtitle",
+                new Vector2(-138f, -14f), new Vector2(484f, 24f),
+                sample.font, Mathf.Max(12, sample.fontSize - 7),
+                subtleText);
+            var subtitleText = subtitleGO.GetComponent<Text>();
+            if (subtitleText != null)
+            {
+                subtitleText.text = "Host, queue friends, sync saves, and launch together.";
+                subtitleText.alignment = TextAnchor.MiddleLeft;
+            }
+
+            var badgeGO = BuildText(headerCard, "SteamBadgeText",
+                new Vector2(222f, 10f), new Vector2(320f, 28f),
+                sample.font, Mathf.Max(13, sample.fontSize - 5),
+                new Color(0.95f, 0.85f, 0.40f, 0.95f));
+            MpMenuState.SteamBadgeText = badgeGO.GetComponent<Text>();
+            if (MpMenuState.SteamBadgeText != null)
+                MpMenuState.SteamBadgeText.alignment = TextAnchor.MiddleRight;
+
+            var actionTitleGO = BuildText(actionCard, "ActionTitle",
+                new Vector2(0f, 162f), new Vector2(sideContentWidth, 24f),
+                sample.font, Mathf.Max(14, sample.fontSize - 5), softText);
+            var actionTitleText = actionTitleGO.GetComponent<Text>();
+            if (actionTitleText != null)
+            {
+                actionTitleText.text = "ACTIONS";
+                actionTitleText.alignment = TextAnchor.MiddleLeft;
+            }
+
+            var rosterTitleGO = BuildText(rosterCard, "RosterTitle",
+                new Vector2(0f, 162f), new Vector2(sideContentWidth, 24f),
+                sample.font, Mathf.Max(14, sample.fontSize - 5), softText);
+            var rosterTitleText = rosterTitleGO.GetComponent<Text>();
+            if (rosterTitleText != null)
+            {
+                rosterTitleText.text = "ROSTER";
+                rosterTitleText.alignment = TextAnchor.MiddleLeft;
+            }
+
+            var mpLayout = BuildLayout(actionCard, new Vector2(0f, -50f), 2f, sideContentWidth);
             MpMenuState.MpLayoutRoot = mpLayout.GetComponent<RectTransform>();
             var hostGO     = CloneItem(exitGO, mpLayout, "HOST GAME");
             var joinGO     = CloneItem(exitGO, mpLayout, "JOIN GAME");
+            var colorGO    = CloneItem(exitGO, mpLayout, PlayerColorSync.BuildLocalMenuLabel());
             var inviteGO   = CloneItem(exitGO, mpLayout, "INVITE FRIEND");
             var retryGO    = CloneItem(exitGO, mpLayout, "RETRY LAST");
             var copyLobbyGO= CloneItem(exitGO, mpLayout, "COPY LOBBY ID");
             var diagGO     = CloneItem(exitGO, mpLayout, "COPY DIAGNOSTICS");
+            BuildSpacer(mpLayout, 12f);
             var backGO     = CloneItem(exitGO, mpLayout, "BACK");
+
+            int actionFontSize = Mathf.Max(13, sample.fontSize - 8);
+            StyleActionItem(hostGO, sample.font, actionFontSize);
+            StyleActionItem(joinGO, sample.font, actionFontSize);
+            StyleActionItem(colorGO, sample.font, actionFontSize);
+            StyleActionItem(inviteGO, sample.font, actionFontSize);
+            StyleActionItem(retryGO, sample.font, actionFontSize);
+            StyleActionItem(copyLobbyGO, sample.font, actionFontSize);
+            StyleActionItem(diagGO, sample.font, actionFontSize);
+            StyleActionItem(backGO, sample.font, actionFontSize);
 
             MpMenuState.MpItems = new[]
             {
                 hostGO.GetComponent<Text>(),
                 joinGO.GetComponent<Text>(),
+                colorGO.GetComponent<Text>(),
                 inviteGO.GetComponent<Text>(),
                 retryGO.GetComponent<Text>(),
                 copyLobbyGO.GetComponent<Text>(),
@@ -238,46 +331,101 @@ namespace CupheadOnline.Patches
                 backGO.GetComponent<Text>(),
             };
 
-            var badgeGO = BuildText(mpRoot, "SteamBadgeText",
-                new Vector2(0f, 244f), new Vector2(440f, 28f),
-                sample.font, Mathf.Max(13, sample.fontSize - 5),
-                new Color(0.95f, 0.85f, 0.40f, 0.95f));
-            MpMenuState.SteamBadgeText = badgeGO.GetComponent<Text>();
+            var colorTitleGO = BuildText(actionCard, "ColorTitle",
+                new Vector2(0f, -138f), new Vector2(sideContentWidth, 20f),
+                sample.font, Mathf.Max(12, sample.fontSize - 7), softText);
+            var colorTitleText = colorTitleGO.GetComponent<Text>();
+            if (colorTitleText != null)
+            {
+                colorTitleText.text = "SWATCHES";
+                colorTitleText.alignment = TextAnchor.MiddleLeft;
+            }
 
-            var statusGO = BuildText(mpRoot, "StatusText",
-                new Vector2(0f, -154f), new Vector2(760f, 72f),
-                sample.font, Mathf.Max(15, sample.fontSize - 4),
-                new Color(0.9f, 0.85f, 0.5f, 1f));
-            MpMenuState.StatusText = statusGO.GetComponent<Text>();
+            var swatches = new Text[PlayerColorSync.SelectionCount];
+            for (int i = 0; i < swatches.Length; i++)
+            {
+                float x = i == PlayerColorSync.AutoSelection
+                    ? -122f
+                    : -60f + ((i - 1) * 34f);
+                float width = i == PlayerColorSync.AutoSelection ? 56f : 28f;
+                var swatchGO = BuildText(actionCard, "ColorSwatch" + i,
+                    new Vector2(x, -164f), new Vector2(width, 24f),
+                    sample.font, i == PlayerColorSync.AutoSelection ? Mathf.Max(11, sample.fontSize - 8) : Mathf.Max(18, sample.fontSize - 3),
+                    Color.white);
+                var swatchText = swatchGO.GetComponent<Text>();
+                if (swatchText != null)
+                {
+                    swatchText.text = i == PlayerColorSync.AutoSelection ? "AUTO" : "\u25A0";
+                    swatchText.alignment = TextAnchor.MiddleCenter;
+                    swatchText.alignByGeometry = true;
+                    swatchText.lineSpacing = 1f;
+                    var outline = swatchGO.GetComponent<Outline>() ?? swatchGO.AddComponent<Outline>();
+                    outline.effectColor = new Color(0f, 0f, 0f, 0.32f);
+                    outline.effectDistance = new Vector2(1f, -1f);
+                }
+                swatches[i] = swatchText;
+            }
+            MpMenuState.ColorSwatches = swatches;
 
-            var presenceGO = BuildText(mpRoot, "PresenceText",
-                new Vector2(0f, -240f), new Vector2(760f, 96f),
+            var colorDetailGO = BuildText(actionCard, "ColorDetailText",
+                new Vector2(0f, -194f), new Vector2(sideContentWidth, 24f),
+                sample.font, Mathf.Max(11, sample.fontSize - 8), subtleText);
+            MpMenuState.ColorDetailText = colorDetailGO.GetComponent<Text>();
+            if (MpMenuState.ColorDetailText != null)
+            {
+                MpMenuState.ColorDetailText.alignment = TextAnchor.MiddleLeft;
+                MpMenuState.ColorDetailText.horizontalOverflow = HorizontalWrapMode.Wrap;
+                MpMenuState.ColorDetailText.verticalOverflow = VerticalWrapMode.Truncate;
+                MpMenuState.ColorDetailText.lineSpacing = 1f;
+            }
+
+            var presenceGO = BuildText(rosterCard, "PresenceText",
+                new Vector2(0f, -10f), new Vector2(sideContentWidth, 296f),
                 sample.font, Mathf.Max(13, sample.fontSize - 6),
-                new Color(0.75f, 0.75f, 0.75f, 0.85f));
+                new Color(0.86f, 0.86f, 0.84f, 0.92f));
             MpMenuState.PresenceText = presenceGO.GetComponent<Text>();
             if (MpMenuState.PresenceText != null)
             {
-                MpMenuState.PresenceText.alignment = TextAnchor.UpperCenter;
-                MpMenuState.PresenceText.lineSpacing = 1.04f;
+                MpMenuState.PresenceText.alignment = TextAnchor.UpperLeft;
+                MpMenuState.PresenceText.lineSpacing = 1.08f;
+                MpMenuState.PresenceText.horizontalOverflow = HorizontalWrapMode.Wrap;
+                MpMenuState.PresenceText.verticalOverflow = VerticalWrapMode.Truncate;
             }
 
-            var mpHintGO = BuildText(mpRoot, "MpHintText",
-                new Vector2(0f, -320f), new Vector2(760f, 48f),
-                sample.font, Mathf.Max(12, sample.fontSize - 6),
-                new Color(0.6f, 0.6f, 0.6f, 0.8f));
+            var statusGO = BuildText(statusCard, "StatusText",
+                new Vector2(0f, 18f), new Vector2(760f, 34f),
+                sample.font, Mathf.Max(13, sample.fontSize - 6),
+                new Color(0.95f, 0.90f, 0.78f, 1f));
+            MpMenuState.StatusText = statusGO.GetComponent<Text>();
+            if (MpMenuState.StatusText != null)
+                MpMenuState.StatusText.alignment = TextAnchor.MiddleLeft;
+
+            var mpHintGO = BuildText(statusCard, "MpHintText",
+                new Vector2(-112f, -16f), new Vector2(520f, 24f),
+                sample.font, Mathf.Max(12, sample.fontSize - 7),
+                new Color(0.66f, 0.66f, 0.63f, 0.88f));
             MpMenuState.HintText = mpHintGO.GetComponent<Text>();
             if (MpMenuState.HintText != null)
-                MpMenuState.HintText.text = "[ Accept to choose. ]";
+            {
+                MpMenuState.HintText.alignment = TextAnchor.MiddleLeft;
+                MpMenuState.HintText.horizontalOverflow = HorizontalWrapMode.Wrap;
+                MpMenuState.HintText.verticalOverflow = VerticalWrapMode.Truncate;
+            }
 
-            var mpBackHintGO = BuildText(mpRoot, "MpBackHintText",
-                new Vector2(0f, -360f), new Vector2(760f, 30f),
-                sample.font, Mathf.Max(12, sample.fontSize - 6),
+            var mpBackHintGO = BuildText(statusCard, "MpBackHintText",
+                new Vector2(270f, -16f), new Vector2(220f, 24f),
+                sample.font, Mathf.Max(12, sample.fontSize - 7),
                 new Color(0.68f, 0.68f, 0.68f, 0.82f));
             MpMenuState.BackHintText = mpBackHintGO.GetComponent<Text>();
             if (MpMenuState.BackHintText != null)
-                MpMenuState.BackHintText.text = "[ Press Escape or Controller B to go back ]";
-            var footerGO = BuildText(MpMenuState.MainContainer, "MainFooterText",
-                Vector2.zero, new Vector2(820f, 24f),
+            {
+                MpMenuState.BackHintText.text = "Escape / Controller B: Back";
+                MpMenuState.BackHintText.alignment = TextAnchor.MiddleRight;
+            }
+
+            var footerParent = GetUiRoot(containerParent);
+            var footerGO = BuildText(footerParent != null ? footerParent.gameObject : containerParent.gameObject, "MainFooterText",
+                Vector2.zero, new Vector2(520f, 24f),
                 sample.font, Mathf.Max(11, sample.fontSize - 8),
                 new Color(0.74f, 0.74f, 0.70f, 0.88f));
             var footerRT = footerGO.GetComponent<RectTransform>();
@@ -285,13 +433,13 @@ namespace CupheadOnline.Patches
             {
                 footerRT.anchorMin = footerRT.anchorMax = new Vector2(0f, 0f);
                 footerRT.pivot = new Vector2(0f, 0f);
-                footerRT.anchoredPosition = new Vector2(18f, 18f);
+                footerRT.anchoredPosition = new Vector2(34f, 26f);
             }
             MpMenuState.MainFooterText = footerGO.GetComponent<Text>();
             if (MpMenuState.MainFooterText != null)
             {
                 MpMenuState.MainFooterText.alignment = TextAnchor.MiddleLeft;
-                MpMenuState.MainFooterText.text = "CupheadOnline v" + PluginInfo.VERSION;
+                MpMenuState.MainFooterText.text = "CupHeads v" + PluginInfo.VERSION;
             }
 
             // ── Build CreditsPanel ────────────────────────────────────────────
@@ -355,15 +503,25 @@ namespace CupheadOnline.Patches
             BuildCreditsLine(
                 credRoot,
                 "CreditsLine4",
-                "cuz me and him wanna play.",
+                "Special thanks to Internallinked",
                 new Vector2(0f, -86f),
+                new Vector2(1080f, 38f),
+                sample.font,
+                Mathf.Max(14, sample.fontSize - 5),
+                new Color(0.84f, 0.84f, 0.84f, 0.95f));
+
+            BuildCreditsLine(
+                credRoot,
+                "CreditsLine5",
+                "cuz me and him wanna play.",
+                new Vector2(0f, -126f),
                 new Vector2(980f, 40f),
                 sample.font,
                 Mathf.Max(15, sample.fontSize - 4),
                 new Color(0.80f, 0.80f, 0.80f, 0.95f));
 
             var hintGO = BuildText(credRoot, "HintText",
-                new Vector2(0f, -198f), new Vector2(700f, 30f),
+                new Vector2(0f, -220f), new Vector2(700f, 30f),
                 sample.font, Mathf.Max(12, sample.fontSize - 6),
                 new Color(0.6f, 0.6f, 0.6f, 0.8f));
             var hintT = hintGO.GetComponent<Text>();
@@ -442,22 +600,83 @@ namespace CupheadOnline.Patches
             return go;
         }
 
-        static GameObject BuildLayout(GameObject parent, Vector2 offset, float spacing = 24f)
+        static Transform GetUiRoot(Transform start)
+        {
+            Transform best = null;
+            for (var current = start; current != null; current = current.parent)
+            {
+                if (current is RectTransform)
+                    best = current;
+            }
+
+            return best ?? start;
+        }
+
+        static Sprite _whiteSprite;
+
+        static Sprite GetWhiteSprite()
+        {
+            if (_whiteSprite != null)
+                return _whiteSprite;
+
+            var tex = Texture2D.whiteTexture;
+            _whiteSprite = Sprite.Create(
+                tex,
+                new Rect(0f, 0f, tex.width, tex.height),
+                new Vector2(0.5f, 0.5f));
+            _whiteSprite.name = "CupHeadsWhiteSprite";
+            return _whiteSprite;
+        }
+
+        static GameObject BuildCard(
+            GameObject parent,
+            string name,
+            Vector2 pos,
+            Vector2 size,
+            Color fill,
+            Color outlineColor)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent.transform, false);
+
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = pos;
+            rt.sizeDelta = size;
+
+            var image = go.AddComponent<Image>();
+            image.sprite = GetWhiteSprite();
+            image.type = Image.Type.Simple;
+            image.color = fill;
+
+            var outline = go.AddComponent<Outline>();
+            outline.effectColor = outlineColor;
+            outline.effectDistance = new Vector2(2f, -2f);
+
+            var shadow = go.AddComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.18f);
+            shadow.effectDistance = new Vector2(0f, -3f);
+
+            return go;
+        }
+
+        static GameObject BuildLayout(GameObject parent, Vector2 offset, float spacing = 24f, float width = 304f)
         {
             var go   = new GameObject("Layout");
             go.transform.SetParent(parent.transform, false);
             var rt   = go.AddComponent<RectTransform>();
-            rt.anchorMin        = new Vector2(0.5f, 0.5f);
-            rt.anchorMax        = new Vector2(0.5f, 0.5f);
-            rt.pivot            = new Vector2(0.5f, 0.5f);
+            rt.anchorMin        = new Vector2(0.5f, 1f);
+            rt.anchorMax        = new Vector2(0.5f, 1f);
+            rt.pivot            = new Vector2(0.5f, 1f);
             rt.anchoredPosition = offset;
-            rt.sizeDelta        = Vector2.zero;
+            rt.sizeDelta        = new Vector2(width, 0f);
             var vlg  = go.AddComponent<VerticalLayoutGroup>();
-            vlg.childAlignment        = TextAnchor.MiddleCenter;
+            vlg.childAlignment        = TextAnchor.UpperLeft;
             vlg.spacing               = spacing;
             vlg.childForceExpandWidth = false;
             vlg.childForceExpandHeight= false;
-            vlg.childControlWidth     = false;
+            vlg.childControlWidth     = true;
             vlg.childControlHeight    = true;
             var fitter = go.AddComponent<ContentSizeFitter>();
             fitter.verticalFit   = ContentSizeFitter.FitMode.PreferredSize;
@@ -478,6 +697,7 @@ namespace CupheadOnline.Patches
             if (t != null)
             {
                 t.text = label;
+                t.supportRichText = true;
                 t.horizontalOverflow = HorizontalWrapMode.Overflow;
                 t.verticalOverflow = VerticalWrapMode.Overflow;
                 t.resizeTextForBestFit = false;
@@ -505,6 +725,42 @@ namespace CupheadOnline.Patches
             return go;
         }
 
+        static void StyleActionItem(GameObject go, Font font, int fontSize)
+        {
+            if (go == null)
+                return;
+
+            var text = go.GetComponent<Text>();
+            if (text != null)
+            {
+                text.font = font;
+                text.fontSize = fontSize;
+                text.alignment = TextAnchor.MiddleLeft;
+                text.resizeTextForBestFit = false;
+                text.lineSpacing = 1f;
+                text.horizontalOverflow = HorizontalWrapMode.Overflow;
+                text.verticalOverflow = VerticalWrapMode.Overflow;
+            }
+
+            var le = go.GetComponent<LayoutElement>() ?? go.AddComponent<LayoutElement>();
+            le.enabled = true;
+            le.ignoreLayout = false;
+            le.preferredHeight = 30f;
+            le.minHeight = 30f;
+            le.flexibleHeight = 0f;
+            le.preferredWidth = 332f;
+            le.minWidth = 332f;
+
+            var rt = go.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.pivot = new Vector2(0.5f, 0.5f);
+                rt.sizeDelta = new Vector2(le.preferredWidth, le.preferredHeight);
+                rt.anchoredPosition = Vector2.zero;
+            }
+        }
+
         static GameObject BuildText(GameObject parent, string name,
                                     Vector2 pos, Vector2 size,
                                     Font font, int fontSize, Color color)
@@ -521,6 +777,7 @@ namespace CupheadOnline.Patches
             txt.fontSize           = fontSize;
             txt.color              = color;
             txt.alignment          = TextAnchor.MiddleCenter;
+            txt.supportRichText    = true;
             txt.horizontalOverflow = HorizontalWrapMode.Overflow;
             txt.verticalOverflow   = VerticalWrapMode.Overflow;
             txt.text               = "";
@@ -746,7 +1003,7 @@ namespace CupheadOnline.Patches
         {
             if (MpMenuState.MainFooterText == null) return;
 
-            string footer = "CupheadOnline v" + PluginInfo.VERSION;
+            string footer = "CupHeads v" + PluginInfo.VERSION;
             if (Plugin.Net == null)
             {
                 MpMenuState.MainFooterText.text = footer;
@@ -795,6 +1052,7 @@ namespace CupheadOnline.Patches
 
             HideMpMenuImmediate();
             if (CreditsState.MainContainer != null) CreditsState.MainContainer.SetActive(false);
+            if (MpMenuState.MainFooterText != null) MpMenuState.MainFooterText.gameObject.SetActive(false);
             SetCanvasVisible(CreditsState.CreditsCanvasGroup, CreditsState.CreditsContainer, true, 0f);
             CreditsState.InCredits = true;
 
@@ -813,6 +1071,7 @@ namespace CupheadOnline.Patches
             StopTrackedCoroutine(CreditsState.ScreenInstance, ref _creditsFadeRoutine);
 
             if (CreditsState.MainContainer != null) CreditsState.MainContainer.SetActive(true);
+            if (MpMenuState.MainFooterText != null) MpMenuState.MainFooterText.gameObject.SetActive(true);
             if (CreditsState.ScreenInstance != null && CreditsState.CreditsCanvasGroup != null)
                 StartTrackedCoroutine(CreditsState.ScreenInstance, ref _creditsFadeRoutine,
                     FadeAndHide(CreditsState.CreditsCanvasGroup, CreditsState.CreditsContainer, 0.15f));
@@ -892,6 +1151,7 @@ namespace CupheadOnline.Patches
                         : TryGetClipboardLobbyId(out clipboardRaw, out clipboardLobbyId)
                             ? "JOIN CLIPBOARD"
                             : "JOIN GAME");
+            SetMpItemLabel(MpMenuState.ColorIndex, PlayerColorSync.BuildLocalMenuLabel());
             SetMpItemLabel(
                 MpMenuState.InviteIndex,
                 Plugin.Net.IsConnected
@@ -985,6 +1245,9 @@ namespace CupheadOnline.Patches
                         return "Wait for a Steam invite. The Friends overlay opens automatically.";
                     return "Wait for a Steam invite, or copy a lobby ID to the clipboard to join directly.";
 
+                case MpMenuState.ColorIndex:
+                    return "Use Left, Right, or Accept to choose your lobby swatch and in-game tint. Auto keeps the first two gameplay slots classic and gives extra participants stable colors.";
+
                 case MpMenuState.InviteIndex:
                     if (Plugin.Net.IsConnected)
                         return Plugin.Net.IsHost
@@ -1017,7 +1280,7 @@ namespace CupheadOnline.Patches
         static void UpdateHintText()
         {
             if (MpMenuState.HintText == null) return;
-            MpMenuState.HintText.text = "[ " + GetSelectionHint() + " ]";
+            MpMenuState.HintText.text = GetSelectionHint();
         }
 
         static bool IsItemAvailable(int index)
@@ -1039,6 +1302,9 @@ namespace CupheadOnline.Patches
                         && !Plugin.Net.IsInputLocked
                         && !Plugin.Net.IsConnected
                         && !Plugin.Net.IsInLobby;
+
+                case MpMenuState.ColorIndex:
+                    return true;
 
                 case MpMenuState.InviteIndex:
                     return Plugin.Net.IsConnected ? Plugin.Net.CanRequestRecovery : Plugin.Net.CanInviteFriend;
@@ -1126,6 +1392,16 @@ namespace CupheadOnline.Patches
                 PlayMenuSound("level_menu_move");
             }
 
+            bool cycleLeft = MpMenuState.MpSelection == MpMenuState.ColorIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuLeft);
+            bool cycleRight = MpMenuState.MpSelection == MpMenuState.ColorIndex
+                && MpMenuState.Btn(inst, CupheadButton.MenuRight);
+            if (cycleLeft || cycleRight)
+            {
+                OnCyclePlayerColor(cycleRight ? 1 : -1);
+                PlayMenuSound("level_menu_move");
+            }
+
             bool cancel = BackPressed(inst);
             bool accept = MpMenuState.Btn(inst, CupheadButton.Accept);
 
@@ -1197,6 +1473,10 @@ namespace CupheadOnline.Patches
                         }
                         break;
 
+                    case MpMenuState.ColorIndex:
+                        OnCyclePlayerColor(1);
+                        break;
+
                     case MpMenuState.InviteIndex:
                         if (Plugin.Net.IsConnected)
                         {
@@ -1238,6 +1518,7 @@ namespace CupheadOnline.Patches
             HideCreditsImmediate();
             if (Plugin.Net != null) Plugin.Net.OnOverlayClosed += HandleOverlayClosed;
             MpMenuState.MainContainer.SetActive(false);
+            if (MpMenuState.MainFooterText != null) MpMenuState.MainFooterText.gameObject.SetActive(false);
             SetCanvasVisible(MpMenuState.MpCanvasGroup, MpMenuState.MpContainer, true, 0f);
             MpMenuState.MpSelection  = 0;
             MpMenuState.InMpMenu     = true;
@@ -1254,6 +1535,8 @@ namespace CupheadOnline.Patches
                         : "Connected.\nWaiting for the host to choose a save slot.")
                     : Plugin.Net.IsSteamReady ? "Select an option." : Plugin.Net.SteamUnavailableStatus,
                 animate: false);
+            if (Plugin.Net != null)
+                Plugin.Net.NotifyLocalAppearanceChanged();
             if (MpMenuState.PresenceText != null) MpMenuState.PresenceText.text = "";
             UpdateDynamicMenuLabels();
             UpdateSteamBadge();
@@ -1294,6 +1577,8 @@ namespace CupheadOnline.Patches
 
             if (MpMenuState.MainContainer != null)
                 MpMenuState.MainContainer.SetActive(showMainMenu);
+            if (MpMenuState.MainFooterText != null)
+                MpMenuState.MainFooterText.gameObject.SetActive(showMainMenu);
 
             var sf = MpMenuState.SelectionField;
             if (restoreMainMenuSelection && sf != null)
@@ -1389,6 +1674,55 @@ namespace CupheadOnline.Patches
                 t.color = !available
                     ? (i == MpMenuState.MpSelection ? dimSel : locked)
                     : (i == MpMenuState.MpSelection ? sel : unsel);
+                t.fontStyle = i == MpMenuState.MpSelection ? FontStyle.Bold : FontStyle.Normal;
+            }
+
+            UpdateColorPickerVisuals(inst);
+        }
+
+        static void UpdateColorPickerVisuals(SlotSelectScreen inst)
+        {
+            if (MpMenuState.ColorSwatches == null || MpMenuState.ColorSwatches.Length == 0)
+                return;
+
+            int preferredSelection = Plugin.PreferredPlayerColorSelection;
+            bool colorMenuFocused = MpMenuState.MpSelection == MpMenuState.ColorIndex;
+            Color focusColor = MpMenuState.SelColor(inst);
+            Color subtleOutline = new Color(0f, 0f, 0f, 0.18f);
+
+            for (int i = 0; i < MpMenuState.ColorSwatches.Length; i++)
+            {
+                var swatch = MpMenuState.ColorSwatches[i];
+                if (swatch == null)
+                    continue;
+
+                bool selected = i == preferredSelection;
+                Color baseColor = i == PlayerColorSync.AutoSelection
+                    ? new Color(0.90f, 0.86f, 0.76f, selected ? 0.98f : 0.76f)
+                    : PlayerColorSync.GetPaletteColor(i);
+
+                if (i != PlayerColorSync.AutoSelection)
+                    baseColor.a = selected ? 0.98f : 0.72f;
+
+                swatch.color = baseColor;
+                swatch.fontStyle = selected ? FontStyle.Bold : FontStyle.Normal;
+                swatch.transform.localScale = selected ? new Vector3(1.08f, 1.08f, 1f) : Vector3.one;
+
+                var outline = swatch.GetComponent<Outline>();
+                if (outline != null)
+                    outline.effectColor = selected
+                        ? (colorMenuFocused ? focusColor : new Color(0.92f, 0.86f, 0.64f, 0.76f))
+                        : subtleOutline;
+            }
+
+            if (MpMenuState.ColorDetailText != null)
+            {
+                string detail = "Selected: "
+                    + PlayerColorSync.GetSelectionName(preferredSelection).ToUpperInvariant();
+                MpMenuState.ColorDetailText.text = detail;
+                MpMenuState.ColorDetailText.color = colorMenuFocused
+                    ? new Color(0.90f, 0.88f, 0.82f, 0.94f)
+                    : new Color(0.72f, 0.70f, 0.66f, 0.88f);
             }
         }
 
@@ -1405,9 +1739,20 @@ namespace CupheadOnline.Patches
                     p = "Peer: " + peerName + "\nState: " + Plugin.Net.CurrentStateName;
             }
 
+            string peerSummary = Plugin.Net.CurrentPeerSummary;
+            if (!string.IsNullOrEmpty(peerSummary))
+                p = string.IsNullOrEmpty(p) ? peerSummary : p + "\n" + peerSummary;
+
             string sessionSummary = SessionSync.GetMenuPresenceSummary();
             if (!string.IsNullOrEmpty(sessionSummary))
                 p = string.IsNullOrEmpty(p) ? sessionSummary : p + "\n" + sessionSummary;
+
+            if (string.IsNullOrEmpty(p))
+            {
+                p = Plugin.Net.IsSteamReady
+                    ? "No lobby yet.\n\nHost a game to create a Steam lobby, or join one to see the full party roster here."
+                    : "Steam is not ready.\n\nLaunch Cuphead through Steam to populate the lobby roster and use invites.";
+            }
 
             if (p == _lastPresence) return;   // only assign when string actually changes
             _lastPresence = p;
@@ -1415,6 +1760,20 @@ namespace CupheadOnline.Patches
         }
 
         // ── Actions ──────────────────────────────────────────────────────────
+
+        static void OnCyclePlayerColor(int direction)
+        {
+            int nextSelection = PlayerColorSync.GetNextSelection(Plugin.PreferredPlayerColorSelection, direction);
+            Plugin.SetPreferredPlayerColorSelection(nextSelection);
+            if (Plugin.Net != null)
+                Plugin.Net.NotifyLocalAppearanceChanged();
+            _lastPresence = null;
+            UpdateDynamicMenuLabels();
+            UpdatePresenceText();
+            UpdateHintText();
+            SlotSelectAwakePatch.RefreshMpLayout();
+            ApplyColors(null);
+        }
 
         static void OnHostGame()
         {

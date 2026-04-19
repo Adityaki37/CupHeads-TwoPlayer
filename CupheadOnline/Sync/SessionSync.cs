@@ -541,6 +541,14 @@ namespace CupheadOnline.Sync
             sb.Append(_localParries);
             sb.Append(" parries");
 
+            string extraSummary = ExtraParticipantTracker.BuildStatusSummary();
+            if (!string.IsNullOrEmpty(extraSummary))
+            {
+                sb.AppendLine();
+                sb.Append("Extras: ");
+                sb.Append(extraSummary);
+            }
+
             return sb.ToString();
         }
 

@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 using CupheadOnline.Net;
 
@@ -17,16 +16,6 @@ namespace CupheadOnline.Sync
     /// </summary>
     public static class DamageAuthority
     {
-        private struct Token
-        {
-            public byte  TargetId;
-            public float Damage;
-            public byte  Source;
-            public uint  Tick;
-        }
-
-        private static readonly Queue<Token> _tokens = new Queue<Token>(16);
-
         // Tag written onto DamageDealer.DamageInfo to mark authorised damage
         // We compare damage amount + source to avoid spoofing.
         private static float  _pendingDamage;

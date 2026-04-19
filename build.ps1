@@ -33,7 +33,7 @@ $DistDir            = Join-Path $Root "dist"
 $ModProject         = Join-Path $Root "CupheadOnline\CupheadOnline.csproj"
 $InstallerDir       = Join-Path $Root "CupheadInstaller"
 $InstallerAssetsDir = Join-Path $InstallerDir "assets"
-$InstallerExe       = Join-Path $InstallerDir "dist\Cupheads.exe"
+$InstallerExe       = Join-Path $InstallerDir "dist\CupHeads.exe"
 
 function Write-Step([string]$msg) {
     Write-Host ""
@@ -143,7 +143,8 @@ if (-not (Test-Path $InstallerExe)) {
     Fail "Portable installer not found at: $InstallerExe"
 }
 
-Copy-Item $InstallerExe (Join-Path $DistDir "Cupheads.exe") -Force
+Remove-Item (Join-Path $DistDir "Cupheads.exe") -Force -ErrorAction SilentlyContinue
+Copy-Item $InstallerExe (Join-Path $DistDir "CupHeads.exe") -Force
 
 if (-not $NoDeploy) {
     Write-Step "Deploying to BepInEx plugin folder"
@@ -159,6 +160,6 @@ Write-Host "  +==============================================+" -ForegroundColor
 Write-Host "  | Build complete                               |" -ForegroundColor Green
 Write-Host "  |                                              |" -ForegroundColor Green
 Write-Host "  | dist\\CupheadOnline.dll  <- mod              |" -ForegroundColor Green
-Write-Host "  | dist\\Cupheads.exe       <- web installer    |" -ForegroundColor Green
+Write-Host "  | dist\\CupHeads.exe      <- web installer    |" -ForegroundColor Green
 Write-Host "  +==============================================+" -ForegroundColor Green
 Write-Host ""

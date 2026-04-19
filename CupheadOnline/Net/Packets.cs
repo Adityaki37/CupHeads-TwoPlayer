@@ -29,6 +29,9 @@ namespace CupheadOnline.Net
         SaveProfile = 16,
         SessionSnapshot = 17,
         SessionSignal = 18,
+        PlayerStatus = 19,
+        ReviveRequest = 20,
+        ReviveGrant = 21,
     }
 
     public enum SessionSignalKind : byte
@@ -56,6 +59,7 @@ namespace CupheadOnline.Net
         public bool GravReversed => (Flags & 8) != 0;
         public bool IsHit => (Flags & 16) != 0;
         public bool IsSuper => (Flags & 32) != 0;
+        public bool IsDead => (Flags & 64) != 0;
 
         public void Write(BinaryWriter w)
         {
@@ -427,6 +431,92 @@ namespace CupheadOnline.Net
         {
             Signal = r.ReadByte();
             SaveRevision = r.ReadUInt16();
+        }
+    }
+
+    public struct PlayerStatusPacket : IPacket
+    {
+        public byte ParticipantId;
+        public byte Health;
+        public byte HealthMax;
+        public byte Flags;
+        public uint Tick;
+
+        public bool IsDead => (Flags & 1) != 0;
+        public bool CanDonate => (Flags & 2) != 0;
+        public bool IsChalice => (Flags & 4) != 0;
+        public bool IsMugman => (Flags & 8) != 0;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(ParticipantId);
+            w.Write(Health);
+            w.Write(HealthMax);
+            w.Write(Flags);
+            w.Write(Tick);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            ParticipantId = r.ReadByte();
+            Health = r.ReadByte();
+            HealthMax = r.ReadByte();
+            Flags = r.ReadByte();
+            Tick = r.ReadUInt32();
+        }
+    }
+
+    public struct ReviveRequestPacket : IPacket
+    {
+        public float PosX;
+        public float PosY;
+        public uint Tick;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(PosX);
+            w.Write(PosY);
+            w.Write(Tick);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            PosX = r.ReadSingle();
+            PosY = r.ReadSingle();
+            Tick = r.ReadUInt32();
+        }
+    }
+
+    public struct ReviveGrantPacket : IPacket
+    {
+        public byte TargetParticipantId;
+        public byte DonorParticipantId;
+        public byte Flags;
+        public float RevivePosX;
+        public float RevivePosY;
+        public uint Tick;
+
+        public bool ApplyDonorCost => (Flags & 1) != 0;
+        public bool ApplyRevive => (Flags & 2) != 0;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(TargetParticipantId);
+            w.Write(DonorParticipantId);
+            w.Write(Flags);
+            w.Write(RevivePosX);
+            w.Write(RevivePosY);
+            w.Write(Tick);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            TargetParticipantId = r.ReadByte();
+            DonorParticipantId = r.ReadByte();
+            Flags = r.ReadByte();
+            RevivePosX = r.ReadSingle();
+            RevivePosY = r.ReadSingle();
+            Tick = r.ReadUInt32();
         }
     }
 }

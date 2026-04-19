@@ -22,6 +22,7 @@ const DEFAULT_INSTALL_MANIFEST = Object.freeze({
 
 function createWindow() {
   mainWindow = new BrowserWindow({
+    title: 'CupHeads Installer',
     width: 880,
     height: 620,
     frame: false,

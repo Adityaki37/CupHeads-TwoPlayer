@@ -42,7 +42,7 @@ namespace CupheadOnline.Patches
             if (!MultiplayerSession.IsActive) return;
             var player = __instance.GetComponent<AbstractPlayerController>();
             if (player == null) return;
-            if (MultiplayerSession.IsRemotePlayer(player.id))
+            if (MultiplayerSession.IsNetworkControlledPlayer(player.id))
                 LoadoutReplicator.ApplyPending(player.id);
         }
     }

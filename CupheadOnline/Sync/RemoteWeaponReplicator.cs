@@ -18,6 +18,12 @@ namespace CupheadOnline.Sync
     {
         public static void Apply(WeaponEventPacket pkt)
         {
+            if (pkt.PlayerId > (byte)PlayerId.PlayerTwo)
+            {
+                ExtraRemoteAvatarManager.ApplyWeaponEvent(pkt);
+                return;
+            }
+
             var player = PlayerManager.GetPlayer((PlayerId)pkt.PlayerId) as LevelPlayerController;
             if (player == null) return;
 

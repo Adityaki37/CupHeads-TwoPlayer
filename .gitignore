@@ -30,6 +30,13 @@ Thumbs.db
 *.temp
 *.log
 
+# Local reverse-engineering / research exports
+Assembly-CSharp-firstpass/
+Rewired_Core/
+Rewired_Windows_Lib/
+Rewired_Core.sln
+Rewired_Windows_Lib.sln
+
 # Build artifacts
 CupheadOnlineInstaller
 *.exe

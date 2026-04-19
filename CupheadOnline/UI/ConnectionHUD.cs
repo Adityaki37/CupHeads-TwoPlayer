@@ -25,6 +25,7 @@ namespace CupheadOnline.UI
         private Text _pingLabel;
         private Text _statusLabel;
         private Text _metaLabel;
+        private Text _extrasLabel;
         private Image _bgImage;
 
         private float _connectedAt = -1f;
@@ -110,18 +111,22 @@ namespace CupheadOnline.UI
             bgRT.anchorMin = bgRT.anchorMax = new Vector2(1f, 1f);
             bgRT.pivot = new Vector2(1f, 1f);
             bgRT.anchoredPosition = new Vector2(-12f, -12f);
-            bgRT.sizeDelta = new Vector2(292f, 96f);
+            bgRT.sizeDelta = new Vector2(292f, 128f);
             _bgImage = bg.AddComponent<Image>();
             _bgImage.color = BgGoodColour;
 
-            _titleLabel = MakeLabel(bg, "CUPHEAD ONLINE", 13, OkayColour, new Vector2(0f, 26f), new Vector2(270f, 20f));
-            _pingLabel = MakeLabel(bg, "PING ---", 13, OkayColour, new Vector2(0f, 6f), new Vector2(270f, 20f));
+            _titleLabel = MakeLabel(bg, "CUPHEAD ONLINE", 13, OkayColour, new Vector2(0f, 40f), new Vector2(270f, 20f));
+            _pingLabel = MakeLabel(bg, "PING ---", 13, OkayColour, new Vector2(0f, 20f), new Vector2(270f, 20f));
 
-            _statusLabel = MakeLabel(bg, "Waiting for peer...", 10, TextColour, new Vector2(0f, -16f), new Vector2(270f, 24f));
+            _statusLabel = MakeLabel(bg, "Waiting for peer...", 10, TextColour, new Vector2(0f, -4f), new Vector2(270f, 24f));
             _statusLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
             _statusLabel.verticalOverflow = VerticalWrapMode.Overflow;
 
-            _metaLabel = MakeLabel(bg, "", 9, MetaColour, new Vector2(0f, -38f), new Vector2(270f, 18f));
+            _metaLabel = MakeLabel(bg, "", 9, MetaColour, new Vector2(0f, -28f), new Vector2(270f, 18f));
+            _extrasLabel = MakeLabel(bg, "", 9, MetaColour, new Vector2(0f, -52f), new Vector2(270f, 30f));
+            _extrasLabel.alignment = TextAnchor.UpperCenter;
+            _extrasLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
+            _extrasLabel.verticalOverflow = VerticalWrapMode.Overflow;
         }
 
         void Update()
@@ -246,6 +251,8 @@ namespace CupheadOnline.UI
                 if (_metaLabel.text != retryHint)
                     _metaLabel.text = retryHint;
                 _metaLabel.color = new Color(1f, 0.74f, 0.66f, 0.92f);
+                if (_extrasLabel != null && !string.IsNullOrEmpty(_extrasLabel.text))
+                    _extrasLabel.text = string.Empty;
                 return;
             }
 
@@ -253,6 +260,8 @@ namespace CupheadOnline.UI
             {
                 if (!string.IsNullOrEmpty(_metaLabel.text))
                     _metaLabel.text = string.Empty;
+                if (_extrasLabel != null && !string.IsNullOrEmpty(_extrasLabel.text))
+                    _extrasLabel.text = string.Empty;
                 return;
             }
 
@@ -293,11 +302,27 @@ namespace CupheadOnline.UI
                 if (Plugin.BossHpScalingEnabled && BossHealthScaler.CurrentMultiplier > 1.0001f)
                     line += " | HP x" + BossHealthScaler.CurrentMultiplier.ToString("0.00");
 
+                if (Plugin.Net.IsHost && Plugin.Net.PendingPeerCount > 0)
+                    line += " | +" + Plugin.Net.PendingPeerCount + " queued";
+
+                if (ExtraParticipantTracker.TotalCount > 0)
+                    line += " | +" + ExtraParticipantTracker.TotalCount + " extra";
+
                 line += " | " + FormatElapsed(Time.unscaledTime - _connectedAt);
 
                 if (_metaLabel.text != line)
                     _metaLabel.text = line;
                 _metaLabel.color = MetaColour;
+
+                if (_extrasLabel != null)
+                {
+                    string extras = ExtraParticipantTracker.BuildStatusSummary();
+                    if (_extrasLabel.text != extras)
+                        _extrasLabel.text = extras;
+                    _extrasLabel.color = ExtraParticipantTracker.DeadCount > 0
+                        ? new Color(1f, 0.74f, 0.66f, 0.92f)
+                        : MetaColour;
+                }
                 return;
             }
 
@@ -308,14 +333,22 @@ namespace CupheadOnline.UI
                 if (!string.IsNullOrEmpty(lobbyId))
                     lobbyLine += " | #" + lobbyId;
 
+                string peerSummary = Plugin.Net.CurrentPeerSummary;
+                if (!string.IsNullOrEmpty(peerSummary))
+                    lobbyLine += " | " + peerSummary;
+
                 if (_metaLabel.text != lobbyLine)
                     _metaLabel.text = lobbyLine;
                 _metaLabel.color = MetaColour;
+                if (_extrasLabel != null && !string.IsNullOrEmpty(_extrasLabel.text))
+                    _extrasLabel.text = string.Empty;
                 return;
             }
 
             if (!string.IsNullOrEmpty(_metaLabel.text))
                 _metaLabel.text = string.Empty;
+            if (_extrasLabel != null && !string.IsNullOrEmpty(_extrasLabel.text))
+                _extrasLabel.text = string.Empty;
         }
 
         static string ShortenPeerName(string name)

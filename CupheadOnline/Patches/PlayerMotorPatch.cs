@@ -30,11 +30,19 @@ namespace CupheadOnline.Patches
             var player = __instance.player;
             if (player == null) return true;
 
-            if (MultiplayerSession.IsRemotePlayer(player.id))
+            byte extraParticipantId;
+            if (ExtraRemoteAvatarManager.TryGetAvatarParticipantId(__instance, out extraParticipantId))
+            {
+                RemoteInputDriver.Tick(extraParticipantId);
+                ApplyRemoteState(__instance, extraParticipantId);
+                return false;
+            }
+
+            if (MultiplayerSession.IsNetworkControlledPlayer(player.id))
             {
                 // ── REMOTE PLAYER: replace FixedUpdate entirely ───────────────
-                RemoteInputDriver.Tick();
-                ApplyRemoteState(__instance);
+                RemoteInputDriver.Tick(player.id);
+                ApplyRemoteState(__instance, (byte)player.id);
                 return false; // skip original
             }
 
@@ -54,20 +62,7 @@ namespace CupheadOnline.Patches
             if (!MultiplayerSession.IsLocalPlayer(player.id)) return;
 
             // Build and send state packet
-            var flags = BuildFlags(__instance);
-            var animHash = GetAnimHash(player);
-
-            var pkt = new PlayerStatePacket
-            {
-                PlayerId  = (byte)player.id,
-                PosX      = __instance.transform.position.x,
-                PosY      = __instance.transform.position.y,
-                LookX     = (sbyte)__instance.LookDirection.x.Value,
-                LookY     = (sbyte)__instance.LookDirection.y.Value,
-                Flags     = flags,
-                AnimState = animHash,
-                Tick      = MultiplayerSession.Tick,
-            };
+            var pkt = BuildStatePacket(player, __instance);
 
             if (MultiplayerSession.IsHost)
                 Plugin.Net.SendPlayerState(ref pkt);
@@ -79,7 +74,7 @@ namespace CupheadOnline.Patches
         //  Helpers
         // ─────────────────────────────────────────────────────────────────────
 
-        static byte BuildFlags(LevelPlayerMotor m)
+        internal static byte BuildFlags(AbstractPlayerController player, LevelPlayerMotor m)
         {
             byte f = 0;
             if (m.Grounded)          f |= 1;
@@ -88,10 +83,26 @@ namespace CupheadOnline.Patches
             if (m.GravityReversed)   f |= 8;
             if (m.IsHit)             f |= 16;
             if (m.IsUsingSuperOrEx)  f |= 32;
+            if (player != null && player.IsDead) f |= 64;
             return f;
         }
 
-        static byte GetAnimHash(LevelPlayerController player)
+        internal static PlayerStatePacket BuildStatePacket(LevelPlayerController player, LevelPlayerMotor motor)
+        {
+            return new PlayerStatePacket
+            {
+                PlayerId = (byte)player.id,
+                PosX = motor.transform.position.x,
+                PosY = motor.transform.position.y,
+                LookX = (sbyte)motor.LookDirection.x.Value,
+                LookY = (sbyte)motor.LookDirection.y.Value,
+                Flags = BuildFlags(player, motor),
+                AnimState = GetAnimHash(player),
+                Tick = MultiplayerSession.Tick,
+            };
+        }
+
+        internal static byte GetAnimHash(LevelPlayerController player)
         {
             var anim = player.animationController?.animator;
             if (anim == null) return 0;
@@ -139,9 +150,9 @@ namespace CupheadOnline.Patches
         /// Called instead of FixedUpdate for the remote player.
         /// Applies interpolated position and syncs motor properties used by the animator.
         /// </summary>
-        static void ApplyRemoteState(LevelPlayerMotor motor)
+        static void ApplyRemoteState(LevelPlayerMotor motor, byte participantId)
         {
-            var snapshot = RemotePlayer.GetNextSnapshot();
+            var snapshot = RemotePlayer.GetNextSnapshot(participantId);
             if (!snapshot.HasValue) return;
 
             var s = snapshot.Value;
@@ -159,11 +170,19 @@ namespace CupheadOnline.Patches
             var t = HarmonyLib.Traverse.Create(motor);
             t.Property("LookDirection").SetValue(new Trilean2(s.LookX, s.LookY));
             t.Property("TrueLookDirection").SetValue(new Trilean2(s.LookX, s.LookY));
+            InputFramePacket input;
+            if (RemoteInputDriver.TryGetCurrent(participantId, out input))
+            {
+                t.Property("MoveDirection").SetValue(new Trilean2(
+                    input.AxisX > 0.38f ? 1 : input.AxisX < -0.38f ? -1 : 0,
+                    input.AxisY > 0.38f ? 1 : input.AxisY < -0.38f ? -1 : 0));
+            }
             t.Property("Grounded").SetValue(s.Grounded);
+            t.Property("Locked").SetValue(false);
             t.Property("GravityReversed").SetValue(s.GravReversed);
 
             // Track state transitions to fire animation events
-            RemotePlayer.UpdateStateTransitions(motor, s);
+            RemotePlayer.UpdateStateTransitions(participantId, motor, s);
         }
     }
 
@@ -178,11 +197,16 @@ namespace CupheadOnline.Patches
         static bool Prefix(PlayerInput __instance, PlayerInput.Axis axis, ref float __result)
         {
             if (!MultiplayerSession.IsActive) return true;
-            if (!MultiplayerSession.IsRemotePlayer(__instance.playerId)) return true;
+            if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId)) return true;
 
-            __result = axis == PlayerInput.Axis.X
-                ? RemoteInputDriver.Current.AxisX
-                : RemoteInputDriver.Current.AxisY;
+            InputFramePacket input;
+            if (!RemoteInputDriver.TryGetCurrent(__instance.playerId, out input))
+            {
+                __result = 0f;
+                return false;
+            }
+
+            __result = axis == PlayerInput.Axis.X ? input.AxisX : input.AxisY;
             return false;
         }
     }
@@ -193,11 +217,16 @@ namespace CupheadOnline.Patches
         static bool Prefix(PlayerInput __instance, PlayerInput.Axis axis, ref int __result)
         {
             if (!MultiplayerSession.IsActive) return true;
-            if (!MultiplayerSession.IsRemotePlayer(__instance.playerId)) return true;
+            if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId)) return true;
 
-            float v = axis == PlayerInput.Axis.X
-                ? RemoteInputDriver.Current.AxisX
-                : RemoteInputDriver.Current.AxisY;
+            InputFramePacket input;
+            if (!RemoteInputDriver.TryGetCurrent(__instance.playerId, out input))
+            {
+                __result = 0;
+                return false;
+            }
+
+            float v = axis == PlayerInput.Axis.X ? input.AxisX : input.AxisY;
             __result = v > 0.38f ? 1 : v < -0.38f ? -1 : 0;
             return false;
         }
@@ -209,9 +238,16 @@ namespace CupheadOnline.Patches
         static bool Prefix(PlayerInput __instance, CupheadButton button, ref bool __result)
         {
             if (!MultiplayerSession.IsActive) return true;
-            if (!MultiplayerSession.IsRemotePlayer(__instance.playerId)) return true;
+            if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId)) return true;
 
-            __result = RemoteInputDriver.Current.IsPressed(button);
+            InputFramePacket input;
+            if (!RemoteInputDriver.TryGetCurrent(__instance.playerId, out input))
+            {
+                __result = false;
+                return false;
+            }
+
+            __result = input.IsPressed(button);
             return false;
         }
     }

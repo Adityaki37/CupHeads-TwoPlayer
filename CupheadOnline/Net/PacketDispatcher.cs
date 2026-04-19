@@ -10,7 +10,7 @@ namespace CupheadOnline.Net
     /// </summary>
     public static class PacketDispatcher
     {
-        public static void Dispatch(PacketType type, BinaryReader r)
+        public static void Dispatch(PacketType type, BinaryReader r, byte sourceParticipantId)
         {
             switch (type)
             {
@@ -29,7 +29,10 @@ namespace CupheadOnline.Net
                     if (!MultiplayerSession.IsHost) break;
                     var pkt = new InputFramePacket();
                     pkt.Read(r);
-                    RemoteInputDriver.Apply(pkt);
+                    byte participantId = sourceParticipantId == byte.MaxValue
+                        ? (byte)MultiplayerSession.GetPrimaryRemoteGameplayId()
+                        : sourceParticipantId;
+                    RemoteInputDriver.Apply(participantId, pkt);
                     break;
                 }
 
@@ -131,6 +134,22 @@ namespace CupheadOnline.Net
                     break;
                 }
 
+                case PacketType.PlayerStatus:
+                {
+                    var pkt = new PlayerStatusPacket();
+                    pkt.Read(r);
+                    ParticipantStatusTracker.Apply(pkt);
+                    break;
+                }
+
+                case PacketType.ReviveGrant:
+                {
+                    var pkt = new ReviveGrantPacket();
+                    pkt.Read(r);
+                    ParticipantReviveController.ApplyGrant(pkt);
+                    break;
+                }
+
                 case PacketType.SessionStart:
                 {
                     if (MultiplayerSession.IsHost) break;
@@ -150,6 +169,7 @@ namespace CupheadOnline.Net
                 case PacketType.Ready:
                 case PacketType.Ping:
                 case PacketType.Pong:
+                case PacketType.ReviveRequest:
                     break;
 
                 default:

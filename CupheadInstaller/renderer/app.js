@@ -129,7 +129,7 @@ function updateInstallPlan(state) {
   else
     sentences.push('BepInEx will be repaired automatically before the mod is copied.');
 
-  sentences.push('CupheadOnline files are refreshed every time you press Install, even if the DLL is already there.');
+  sentences.push('CupHeads mod files are refreshed every time you press Install, even if the DLL is already there.');
 
   if (state.hasLegacyFiles)
     sentences.push('Legacy LiteNetLib leftovers from older builds will be removed automatically.');
@@ -149,7 +149,7 @@ function updateInstallSummary(state) {
   parts.push(skipBepInExRepair
     ? 'BepInEx will be kept as-is unless the verify pass finds damage.'
     : 'BepInEx needs repair, so the installer will fetch a fresh bootstrap package.');
-  parts.push('Bundled CupheadOnline files will be overwritten with the latest installer copy.');
+  parts.push('Bundled CupHeads files will be overwritten with the latest installer copy.');
 
   if (state.hasLegacyFiles)
     parts.push('Old network leftovers like LiteNetLib.dll will be cleaned out.');
@@ -407,7 +407,7 @@ installer.onInstallProgress((data) => {
   if (type === 'done') {
     setText(
       'done-summary',
-      data.summary || 'CupheadOnline is refreshed and ready to launch through Steam.'
+      data.summary || 'CupHeads is refreshed and ready to launch through Steam.'
     );
     setTimeout(() => goTo(3), 700);
   }

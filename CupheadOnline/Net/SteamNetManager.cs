@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Steamworks;
 using UnityEngine;
@@ -41,6 +42,10 @@ namespace CupheadOnline.Net
         public string CurrentStateName => _state.ToString();
         public string CurrentPeerName => FriendName(_peerId);
         public string CurrentLobbyId => _lobbyId == CSteamID.Nil ? string.Empty : _lobbyId.m_SteamID.ToString();
+        public int LobbyMemberCount => GetLobbyMemberCount();
+        public int ConnectedPeerCount => _isHost ? CountHostPeers(HostPeerStage.Connected) : (_state == NetState.Connected && _peerId != CSteamID.Nil ? 1 : 0);
+        public int PendingPeerCount => _isHost ? CountPendingHostPeers() : 0;
+        public string CurrentPeerSummary => BuildCurrentPeerSummary();
 
         public bool CanInviteFriend => _steamReady && _isHost && _lobbyId != CSteamID.Nil;
         public bool CanCopyLobbyId => _steamReady && _lobbyId != CSteamID.Nil;
@@ -92,7 +97,7 @@ namespace CupheadOnline.Net
         public string GetLobbyPresence()
         {
             if (!_steamReady || _lobbyId == CSteamID.Nil) return string.Empty;
-            int n = SteamMatchmaking.GetNumLobbyMembers(_lobbyId);
+            int n = GetLobbyMemberCount();
             if (n <= 0) return string.Empty;
 
             CSteamID localId = SteamUser.GetSteamID();
@@ -101,30 +106,41 @@ namespace CupheadOnline.Net
             for (int i = 0; i < n; i++)
             {
                 CSteamID member = SteamMatchmaking.GetLobbyMemberByIndex(_lobbyId, i);
-                string name = (member == localId)
-                    ? "You"
-                    : SteamFriends.GetFriendPersonaName(member);
-                string role   = (i == 0) ? "Host" : "Guest";
-                string suffix = string.Empty;
-
-                // Annotate the remote peer with handshake progress
-                if (member != localId && member == _peerId)
-                {
-                    switch (_state)
-                    {
-                        case NetState.WaitingHello:
-                        case NetState.WaitingWelcome:
-                        case NetState.WaitingReady:
-                            suffix = " (Connecting\u2026)";
-                            break;
-                        case NetState.Connected:
-                            suffix = " (Connected)";
-                            break;
-                    }
-                }
-                sb.AppendLine(role + ": " + name + suffix);
+                string line = BuildLobbyPresenceLine(member, localId);
+                if (!string.IsNullOrEmpty(line))
+                    sb.AppendLine(line);
             }
             return sb.ToString().TrimEnd();
+        }
+
+        public void NotifyLocalAppearanceChanged()
+        {
+            PublishLocalLobbyMemberData();
+            if (_isHost)
+                RefreshHostLobbyRoster();
+        }
+
+        public int GetParticipantColorSelection(byte participantId)
+        {
+            if (participantId == INVALID_PARTICIPANT_ID)
+                return PlayerColorSync.AutoSelection;
+
+            if (MultiplayerSession.IsActive && participantId == (byte)MultiplayerSession.LocalId)
+                return PlayerColorSync.NormalizeSelection(Plugin.PreferredPlayerColorSelection);
+
+            CSteamID member;
+            if (TryGetLobbyMemberForParticipant(participantId, out member))
+                return GetLobbyMemberPreferredColorSelection(member);
+
+            if (_peerId != CSteamID.Nil)
+            {
+                if (_isHost && participantId == (byte)PlayerId.PlayerTwo)
+                    return GetLobbyMemberPreferredColorSelection(_peerId);
+                if (!_isHost && participantId == (byte)PlayerId.PlayerOne)
+                    return GetLobbyMemberPreferredColorSelection(_peerId);
+            }
+
+            return PlayerColorSync.AutoSelection;
         }
 
         /// <summary>Fired on the main thread with human-readable status.</summary>
@@ -320,6 +336,9 @@ namespace CupheadOnline.Net
             sb.AppendLine("Latency: " + Latency + "ms");
             sb.AppendLine("Lobby ID: " + (_lobbyId == CSteamID.Nil ? "(none)" : _lobbyId.m_SteamID.ToString()));
             sb.AppendLine("Peer: " + (_peerId == CSteamID.Nil ? "(none)" : FriendName(_peerId) + " [" + _peerId.m_SteamID + "]"));
+            sb.AppendLine("Lobby Members: " + LobbyMemberCount);
+            sb.AppendLine("Connected Peers: " + ConnectedPeerCount);
+            sb.AppendLine("Pending Peers: " + PendingPeerCount);
             sb.AppendLine("Retry Action: " + GetRetryActionLabel());
             sb.AppendLine("Reconnect Available: " + _lastDisconnectWasConnected);
             sb.AppendLine("Last Status: " + (_lastStatusMessage ?? string.Empty));
@@ -333,6 +352,13 @@ namespace CupheadOnline.Net
             {
                 sb.AppendLine("Presence:");
                 sb.AppendLine(presence);
+            }
+
+            string hostPeerSection = BuildHostPeerDiagnostics();
+            if (!string.IsNullOrEmpty(hostPeerSection))
+            {
+                sb.AppendLine("Tracked Peers:");
+                sb.AppendLine(hostPeerSection);
             }
 
             string sessionDiagnostics = SessionSync.BuildDiagnosticsSection();
@@ -366,6 +392,23 @@ namespace CupheadOnline.Net
             JoinLobby,
         }
 
+        enum HostPeerStage
+        {
+            Lobby,
+            WaitingHello,
+            WaitingReady,
+            Connected,
+        }
+
+        sealed class HostPeerInfo
+        {
+            public CSteamID SteamId;
+            public HostPeerStage Stage;
+            public DateTime LastReceiveUtc;
+            public float StageEnteredTime;
+            public string CachedName;
+        }
+
         NetState _state  = NetState.Idle;
         bool     _isHost;
         CSteamID _peerId  = CSteamID.Nil;
@@ -394,10 +437,17 @@ namespace CupheadOnline.Net
         const float LOBBY_TIMEOUT     = 20f;
         const int   PEER_TIMEOUT_MS   = 30_000;
         const float PING_INTERVAL     = 3f;
+        const int   MAX_LOBBY_MEMBERS = 8;
+        const byte  INVALID_PARTICIPANT_ID = byte.MaxValue;
+        const string LOBBY_KEY_ACTIVE_PEER = "active_peer";
+        const string LOBBY_KEY_ACTIVE_MODE = "active_mode";
+        const string LOBBY_KEY_PARTICIPANT_PREFIX = "participant_";
+        const string LOBBY_MEMBER_KEY_COLOR = "preferred_color";
 
         float    _stateEnteredTime;            // Time.realtimeSinceStartup at state change
         DateTime _lastReceive  = DateTime.UtcNow;
         float    _nextPingTime;
+        float    _nextQueuePollTime;
         DateTime _pingSentAt;
         bool     _pingSentPending;
         bool     _steamInitAttempted;
@@ -405,6 +455,9 @@ namespace CupheadOnline.Net
         string   _steamUnavailableStatus = "Steam is unavailable.\nLaunch Cuphead through Steam.";
         string   _lastStatusMessage;
         string   _lastFailureReason;
+        readonly Dictionary<ulong, HostPeerInfo> _hostPeers = new Dictionary<ulong, HostPeerInfo>();
+        readonly Dictionary<ulong, byte> _peerSessionParticipantIds = new Dictionary<ulong, byte>();
+        byte _nextSessionParticipantId = 2;
 
         // ── Constructor ───────────────────────────────────────────────────────
 
@@ -466,12 +519,14 @@ namespace CupheadOnline.Net
             _lastDisconnectWasConnected = false;
             Shutdown();
             _isHost = true;
+            _hostPeers.Clear();
+            _nextQueuePollTime = 0f;
             SteamNetworking.AllowP2PPacketRelay(true);
             MultiplayerSession.StartAsHost();
 
             SetState(NetState.CreatingLobby, "Creating lobby...");
             _crLobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
-            _crLobbyCreated.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, 2));
+            _crLobbyCreated.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, MAX_LOBBY_MEMBERS));
             return true;
         }
 
@@ -488,9 +543,14 @@ namespace CupheadOnline.Net
             }
             _lobbyId = new CSteamID(r.m_ulSteamIDLobby);
             SteamMatchmaking.SetLobbyData(_lobbyId, "game", "CupheadOnline");
+            SteamMatchmaking.SetLobbyData(_lobbyId, LOBBY_KEY_ACTIVE_MODE, "single-primary");
+            PublishLocalLobbyMemberData();
+            UpdateLobbyActivePeerData();
+            RefreshHostLobbyRoster();
 
             string waitStatus =
-                "Waiting for player...\n"
+                "Waiting for a gameplay peer...\n"
+                + "Extra lobby members will queue automatically.\n"
                 + "Use Invite Friend to send another Steam invite.";
             string copyStatus;
             if (TryCopyLobbyId(out copyStatus))
@@ -513,10 +573,30 @@ namespace CupheadOnline.Net
                 return;
             }
             SteamNetworking.AcceptP2PSessionWithUser(req.m_steamIDRemote);
-            _peerId = req.m_steamIDRemote;
-            SetState(NetState.WaitingHello,
-                "Player connecting...");
-            Plugin.Log.LogInfo("[SteamNet] P2P accepted from " + FriendName(_peerId));
+            if (_isHost)
+            {
+                var info = GetOrCreateHostPeer(req.m_steamIDRemote);
+                info.LastReceiveUtc = DateTime.UtcNow;
+
+                if (_peerId == CSteamID.Nil || (_peerId == req.m_steamIDRemote && _state != NetState.Connected))
+                {
+                    _peerId = req.m_steamIDRemote;
+                    UpdateHostPeerStage(req.m_steamIDRemote, HostPeerStage.WaitingHello);
+                    UpdateLobbyActivePeerData();
+                    SetState(NetState.WaitingHello, "Player connecting...");
+                }
+                else if (req.m_steamIDRemote != _peerId)
+                {
+                    UpdateHostPeerStage(req.m_steamIDRemote, HostPeerStage.WaitingHello);
+                    Plugin.Log.LogInfo("[SteamNet] Accepted extra gameplay peer " + FriendName(req.m_steamIDRemote) + ".");
+                }
+            }
+            else
+            {
+                _peerId = req.m_steamIDRemote;
+            }
+
+            Plugin.Log.LogInfo("[SteamNet] P2P accepted from " + FriendName(req.m_steamIDRemote));
         }
 
         // ── Client flow ───────────────────────────────────────────────────────
@@ -530,6 +610,7 @@ namespace CupheadOnline.Net
             _lastDisconnectWasConnected = false;
             Shutdown();
             _isHost = false;
+            _nextQueuePollTime = 0f;
             SteamNetworking.AllowP2PPacketRelay(true);
             SetState(NetState.JoiningLobby, "Joining lobby #" + lobbyId.m_SteamID + "...");
             _crLobbyEntered = CallResult<LobbyEnter_t>.Create(OnLobbyEntered);
@@ -562,43 +643,51 @@ namespace CupheadOnline.Net
             _lobbyId = new CSteamID(r.m_ulSteamIDLobby);
             _peerId  = SteamMatchmaking.GetLobbyOwner(_lobbyId);
             _lastRetryPeerName = FriendName(_peerId);
-
-            MultiplayerSession.StartAsClient();
-            SetState(NetState.WaitingWelcome,
-                "Connecting to " + FriendName(_peerId) + "...");
-
-            // Knock: sending Hello triggers P2PSessionRequest on host side
-            RawSend(new[] { (byte)PacketType.Hello }, reliable: true);
-            Plugin.Log.LogInfo("[SteamNet] Hello sent to " + FriendName(_peerId));
+            _nextQueuePollTime = 0f;
+            PublishLocalLobbyMemberData();
+            TryBeginClientHandshakeFromLobby(forceStatus: true);
         }
 
         // ── Handshake message handlers ────────────────────────────────────────
 
-        void OnHelloReceived()
+        void OnHelloReceived(CSteamID sender)
         {
-            // host ← Hello
-            RawSend(new[] { (byte)PacketType.Welcome }, reliable: true);
-            SetState(NetState.WaitingReady,
-                "Almost there\u2026");
-            Plugin.Log.LogInfo("[SteamNet] Hello received, Welcome sent.");
+            if (!_isHost || sender == CSteamID.Nil)
+                return;
+
+            if (_peerId == CSteamID.Nil)
+                _peerId = sender;
+
+            UpdateHostPeerStage(sender, HostPeerStage.WaitingReady);
+            RawSendTo(sender, new[] { (byte)PacketType.Welcome }, reliable: true);
+            if (sender == _peerId && _state != NetState.Connected)
+                SetState(NetState.WaitingReady, "Almost there\u2026");
+            else if (_state == NetState.Connected)
+                FireStatus("Additional participant authorizing...");
+            Plugin.Log.LogInfo("[SteamNet] Hello received from " + FriendName(sender) + ", Welcome sent.");
         }
 
         void OnWelcomeReceived()
         {
             // client ← Welcome
             RawSend(new[] { (byte)PacketType.Ready }, reliable: true);
-            FinishConnect();
+            FinishConnect(_peerId);
             Plugin.Log.LogInfo("[SteamNet] Welcome received, Ready sent.");
         }
 
-        void OnReadyReceived()
+        void OnReadyReceived(CSteamID sender)
         {
-            // host ← Ready
-            FinishConnect();
-            Plugin.Log.LogInfo("[SteamNet] Ready received — fully connected.");
+            if (!_isHost || sender == CSteamID.Nil)
+                return;
+
+            if (_peerId == CSteamID.Nil)
+                _peerId = sender;
+
+            FinishConnect(sender);
+            Plugin.Log.LogInfo("[SteamNet] Ready received from " + FriendName(sender) + " - fully connected.");
         }
 
-        void FinishConnect()
+        void FinishConnect(CSteamID connectedPeer)
         {
             if (_isHost)
             {
@@ -612,14 +701,28 @@ namespace CupheadOnline.Net
 
             _lastReceive = DateTime.UtcNow;
             _lastDisconnectWasConnected = false;
-            string name  = FriendName(_peerId);
+            string name  = FriendName(_isHost ? connectedPeer : _peerId);
+            if (_isHost && connectedPeer != CSteamID.Nil)
+            {
+                UpdateHostPeerStage(connectedPeer, HostPeerStage.Connected);
+                if (connectedPeer == _peerId)
+                {
+                    ReleaseSessionParticipantIdForPeer(connectedPeer);
+                    UpdateLobbyActivePeerData();
+                }
+                else
+                {
+                    GetOrAssignSessionParticipantId(connectedPeer);
+                }
+                RefreshHostLobbyRoster();
+            }
             SetState(
                 NetState.Connected,
                 _isHost
-                    ? "Guest connected.\nSelect OPEN SAVE SLOT to choose a file."
+                    ? "Participant connected.\nSelect OPEN SAVE SLOT to choose a file."
                     : "Connected.\nWaiting for the host to choose a save slot.");
 
-            ConnectionHUD.Show("Connected - " + name);
+            ConnectionHUD.Show("Connected - " + (_isHost ? BuildCurrentPeerSummary() : name));
             SessionSync.OnConnected(_isHost);
 
             if (_isHost)
@@ -646,16 +749,21 @@ namespace CupheadOnline.Net
                          (uint)EChatMemberStateChange.k_EChatMemberStateChangeLeft) != 0
                      || (cb.m_rgfChatMemberStateChange &
                          (uint)EChatMemberStateChange.k_EChatMemberStateChangeDisconnected) != 0;
-            if (!left) return;
-
             var changed = new CSteamID(cb.m_ulSteamIDUserChanged);
-            if (changed != _peerId) return;
-
-            string name = FriendName(changed);
             MainThreadQueue.Enqueue(() =>
             {
+                if (_isHost)
+                    RefreshHostLobbyRoster();
+
+                if (!left)
+                    return;
+
+                string name = FriendName(changed);
                 Plugin.Log.LogInfo("[SteamNet] " + name + " left the lobby.");
-                HandleDisconnect(name + " left the lobby.");
+                if (changed == _peerId)
+                    HandleDisconnect(name + " left the lobby.");
+                else if (_isHost)
+                    RemoveHostPeer(changed);
             });
         }
 
@@ -672,18 +780,49 @@ namespace CupheadOnline.Net
             string friendlyReason = string.IsNullOrEmpty(reason) ? "Connection closed." : reason;
             _lastFailureReason = friendlyReason;
             _lastDisconnectWasConnected = wasConnected;
-            if (_steamReady && _peerId != CSteamID.Nil)
-                SteamNetworking.CloseP2PSessionWithUser(_peerId);
+            CSteamID oldPeer = _peerId;
+            if (_steamReady && oldPeer != CSteamID.Nil)
+                SteamNetworking.CloseP2PSessionWithUser(oldPeer);
+            if (_isHost && oldPeer != CSteamID.Nil)
+            {
+                if (IsLobbyMember(oldPeer))
+                    UpdateHostPeerStage(oldPeer, HostPeerStage.Lobby);
+                else
+                    RemoveHostPeer(oldPeer);
+
+                var otherPeers = new List<CSteamID>();
+                foreach (var entry in _hostPeers.Values)
+                {
+                    if (entry == null || entry.SteamId == CSteamID.Nil || entry.SteamId == oldPeer)
+                        continue;
+                    otherPeers.Add(entry.SteamId);
+                }
+
+                for (int i = 0; i < otherPeers.Count; i++)
+                {
+                    var peer = otherPeers[i];
+                    try { SteamNetworking.CloseP2PSessionWithUser(peer); } catch { }
+                    if (IsLobbyMember(peer))
+                        UpdateHostPeerStage(peer, HostPeerStage.Lobby);
+                    else
+                        RemoveHostPeer(peer);
+                    ReleaseSessionParticipantIdForPeer(peer);
+                }
+            }
+            ReleaseSessionParticipantIdForPeer(oldPeer);
             _peerId          = CSteamID.Nil;
             _pingSentPending = false;
+            UpdateLobbyActivePeerData();
+            if (_isHost)
+                RefreshHostLobbyRoster();
             MultiplayerSession.End();
 
             if (_isHost && _lobbyId != CSteamID.Nil)
             {
                 // Host stays in lobby — reset to WaitingInLobby so another player can join
                 SetState(NetState.WaitingInLobby,
-                    friendlyReason + "\n\nWaiting for next player...\n"
-                    + "Use Invite Friend to send another Steam invite.");
+                    friendlyReason + "\n\nWaiting for the next gameplay peer...\n"
+                    + "Extra lobby members will queue automatically.");
                 if (wasConnected) ConnectionHUD.ShowDisconnected(friendlyReason);
             }
             else
@@ -715,6 +854,12 @@ namespace CupheadOnline.Net
 
             float now     = Time.realtimeSinceStartup;
             float elapsed = now - _stateEnteredTime;
+
+            if (_state == NetState.WaitingInLobby && !_isHost && now >= _nextQueuePollTime)
+            {
+                _nextQueuePollTime = now + 1f;
+                TryBeginClientHandshakeFromLobby(forceStatus: false);
+            }
 
             // Handshake / lobby timeouts
             switch (_state)
@@ -784,21 +929,256 @@ namespace CupheadOnline.Net
             }
         }
 
+        bool IsConnectedHostPeer(CSteamID sender)
+        {
+            HostPeerInfo info;
+            return _isHost
+                && _hostPeers.TryGetValue(sender.m_SteamID, out info)
+                && info != null
+                && info.Stage == HostPeerStage.Connected;
+        }
+
+        byte GetDispatchParticipantIdForHostPeer(CSteamID sender)
+        {
+            if (sender == CSteamID.Nil)
+                return INVALID_PARTICIPANT_ID;
+
+            if (sender == _peerId)
+                return (byte)PlayerId.PlayerTwo;
+
+            return GetOrAssignSessionParticipantId(sender);
+        }
+
+        byte GetOrAssignSessionParticipantId(CSteamID sender)
+        {
+            if (sender == CSteamID.Nil)
+                return INVALID_PARTICIPANT_ID;
+
+            byte participantId;
+            if (_peerSessionParticipantIds.TryGetValue(sender.m_SteamID, out participantId))
+                return participantId;
+
+            while (_nextSessionParticipantId <= (byte)PlayerId.PlayerTwo
+                || _peerSessionParticipantIds.ContainsValue(_nextSessionParticipantId))
+            {
+                _nextSessionParticipantId++;
+                if (_nextSessionParticipantId == INVALID_PARTICIPANT_ID)
+                    return INVALID_PARTICIPANT_ID;
+            }
+
+            participantId = _nextSessionParticipantId;
+            _peerSessionParticipantIds[sender.m_SteamID] = participantId;
+            _nextSessionParticipantId++;
+            return participantId;
+        }
+
+        void ReleaseSessionParticipantIdForPeer(CSteamID sender)
+        {
+            if (sender == CSteamID.Nil)
+                return;
+
+            byte participantId;
+            if (_peerSessionParticipantIds.TryGetValue(sender.m_SteamID, out participantId))
+            {
+                _peerSessionParticipantIds.Remove(sender.m_SteamID);
+                ExtraParticipantTracker.RemoveParticipant(participantId);
+            }
+        }
+
+        bool TryGetPeerForParticipant(byte participantId, out CSteamID peer)
+        {
+            peer = CSteamID.Nil;
+
+            if (!_isHost || participantId == INVALID_PARTICIPANT_ID)
+                return false;
+
+            if (participantId == (byte)PlayerId.PlayerTwo)
+            {
+                peer = _peerId;
+                return peer != CSteamID.Nil;
+            }
+
+            foreach (var entry in _peerSessionParticipantIds)
+            {
+                if (entry.Value != participantId)
+                    continue;
+
+                peer = new CSteamID(entry.Key);
+                return peer != CSteamID.Nil;
+            }
+
+            return false;
+        }
+
+        void BroadcastToConnectedPeers(byte[] data, bool reliable, CSteamID excludePeer)
+        {
+            if (!_steamReady || !_isHost)
+                return;
+
+            foreach (var entry in _hostPeers.Values)
+            {
+                if (entry == null
+                 || entry.SteamId == CSteamID.Nil
+                 || entry.Stage != HostPeerStage.Connected
+                 || entry.SteamId == excludePeer)
+                    continue;
+
+                RawSendTo(entry.SteamId, data, reliable);
+            }
+        }
+
+        void RelayParticipantPlayerState(PlayerStatePacket pkt, CSteamID sender)
+        {
+            _sendBuf.SetLength(0);
+            _sendBuf.Position = 0;
+            _sendWriter.Write((byte)PacketType.PlayerState);
+            pkt.Write(_sendWriter);
+            _sendWriter.Flush();
+
+            int len = (int)_sendBuf.Length;
+            var data = new byte[len];
+            Buffer.BlockCopy(_sendBuf.GetBuffer(), 0, data, 0, len);
+            BroadcastToConnectedPeers(data, reliable: false, excludePeer: sender);
+        }
+
+        void RelayParticipantWeaponEvent(WeaponEventPacket pkt, CSteamID sender)
+        {
+            _sendBuf.SetLength(0);
+            _sendBuf.Position = 0;
+            _sendWriter.Write((byte)PacketType.WeaponEvent);
+            pkt.Write(_sendWriter);
+            _sendWriter.Flush();
+
+            int len = (int)_sendBuf.Length;
+            var data = new byte[len];
+            Buffer.BlockCopy(_sendBuf.GetBuffer(), 0, data, 0, len);
+            BroadcastToConnectedPeers(data, reliable: true, excludePeer: sender);
+        }
+
+        void RelayParticipantPlayerStatus(PlayerStatusPacket pkt, CSteamID sender)
+        {
+            _sendBuf.SetLength(0);
+            _sendBuf.Position = 0;
+            _sendWriter.Write((byte)PacketType.PlayerStatus);
+            pkt.Write(_sendWriter);
+            _sendWriter.Flush();
+
+            int len = (int)_sendBuf.Length;
+            var data = new byte[len];
+            Buffer.BlockCopy(_sendBuf.GetBuffer(), 0, data, 0, len);
+            BroadcastToConnectedPeers(data, reliable: true, excludePeer: sender);
+        }
+
+        void HandleHostPlayerState(CSteamID sender, BinaryReader reader)
+        {
+            var incoming = new PlayerStatePacket();
+            incoming.Read(reader);
+
+            if (sender == _peerId)
+            {
+                var hostProxyState = incoming;
+                hostProxyState.PlayerId = (byte)PlayerId.PlayerTwo;
+                RemotePlayer.OnStateReceived(hostProxyState);
+            }
+
+            byte sessionParticipantId = GetOrAssignSessionParticipantId(sender);
+            if (sessionParticipantId == INVALID_PARTICIPANT_ID)
+                return;
+
+            if (sender != _peerId)
+            {
+                var extraState = incoming;
+                extraState.PlayerId = sessionParticipantId;
+                ExtraParticipantTracker.Apply(extraState);
+            }
+
+            if (ConnectedPeerCount <= 1)
+                return;
+
+            incoming.PlayerId = sessionParticipantId;
+            RelayParticipantPlayerState(incoming, sender);
+        }
+
+        void HandleHostWeaponEvent(CSteamID sender, BinaryReader reader)
+        {
+            var incoming = new WeaponEventPacket();
+            incoming.Read(reader);
+
+            byte sessionParticipantId = sender == _peerId
+                ? (byte)PlayerId.PlayerTwo
+                : GetOrAssignSessionParticipantId(sender);
+
+            if (sessionParticipantId == INVALID_PARTICIPANT_ID)
+                return;
+
+            incoming.PlayerId = sessionParticipantId;
+            RemoteWeaponReplicator.Apply(incoming);
+
+            if (ConnectedPeerCount <= 1)
+                return;
+
+            RelayParticipantWeaponEvent(incoming, sender);
+        }
+
+        void HandleHostPlayerStatus(CSteamID sender, BinaryReader reader)
+        {
+            var incoming = new PlayerStatusPacket();
+            incoming.Read(reader);
+
+            byte sessionParticipantId = sender == _peerId
+                ? (byte)PlayerId.PlayerTwo
+                : GetOrAssignSessionParticipantId(sender);
+
+            if (sessionParticipantId == INVALID_PARTICIPANT_ID)
+                return;
+
+            incoming.ParticipantId = sessionParticipantId;
+            ParticipantStatusTracker.Apply(incoming);
+
+            if (ConnectedPeerCount <= 1)
+                return;
+
+            RelayParticipantPlayerStatus(incoming, sender);
+        }
+
+        void HandleHostReviveRequest(CSteamID sender, BinaryReader reader)
+        {
+            var incoming = new ReviveRequestPacket();
+            incoming.Read(reader);
+
+            byte sessionParticipantId = sender == _peerId
+                ? (byte)PlayerId.PlayerTwo
+                : GetOrAssignSessionParticipantId(sender);
+
+            if (sessionParticipantId == INVALID_PARTICIPANT_ID)
+                return;
+
+            ParticipantReviveController.ResolveHostReviveRequest(
+                sessionParticipantId,
+                new Vector2(incoming.PosX, incoming.PosY),
+                incoming.Tick,
+                this);
+        }
+
         void ProcessPacket(byte[] buf, int length, CSteamID sender)
         {
             if (length == 0) return;
-            _lastReceive = DateTime.UtcNow;
+            DateTime receivedAt = DateTime.UtcNow;
+            if (_peerId == CSteamID.Nil || sender == _peerId || _state != NetState.Connected)
+                _lastReceive = receivedAt;
+            if (_isHost)
+            {
+                var info = GetOrCreateHostPeer(sender);
+                info.LastReceiveUtc = receivedAt;
+            }
 
             byte type = buf[0];
 
             // ── Handshake ─────────────────────────────────────────────────────
             if (type == (byte)PacketType.Hello)
             {
-                if (_isHost && (_state == NetState.WaitingHello || _state == NetState.WaitingInLobby))
-                {
-                    if (_peerId == CSteamID.Nil) _peerId = sender;
-                    OnHelloReceived();
-                }
+                if (_isHost)
+                    OnHelloReceived(sender);
                 return;
             }
             if (type == (byte)PacketType.Welcome)
@@ -808,17 +1188,20 @@ namespace CupheadOnline.Net
             }
             if (type == (byte)PacketType.Ready)
             {
-                if (_isHost && _state == NetState.WaitingReady) OnReadyReceived();
+                if (_isHost) OnReadyReceived(sender);
                 return;
             }
 
             // ── Ping / Pong ───────────────────────────────────────────────────
             if (type == (byte)PacketType.Ping)
             {
-                RawSend(new[] { (byte)PacketType.Pong }, reliable: false);
+                if (_isHost)
+                    RawSendTo(sender, new[] { (byte)PacketType.Pong }, reliable: false);
+                else
+                    RawSend(new[] { (byte)PacketType.Pong }, reliable: false);
                 return;
             }
-            if (type == (byte)PacketType.Pong && _pingSentPending)
+            if (type == (byte)PacketType.Pong && _pingSentPending && (!_isHost || sender == _peerId))
             {
                 _pingSentPending = false;
                 Latency = (int)(DateTime.UtcNow - _pingSentAt).TotalMilliseconds;
@@ -829,17 +1212,64 @@ namespace CupheadOnline.Net
             // ── Graceful disconnect ───────────────────────────────────────────
             if (type == (byte)PacketType.Disconnect)
             {
-                HandleDisconnect(FriendName(sender) + " disconnected.");
+                if (sender == _peerId)
+                    HandleDisconnect(FriendName(sender) + " disconnected.");
+                else if (_isHost)
+                    RemoveHostPeer(sender);
                 return;
             }
 
             // ── Game packets — only accepted when fully connected ─────────────
             if (_state != NetState.Connected) return;
-            if (_peerId != CSteamID.Nil && sender != _peerId) return;
+            if (_isHost)
+            {
+                if (!IsConnectedHostPeer(sender))
+                    return;
+
+                if (type == (byte)PacketType.PlayerState)
+                {
+                    using (var ms = new MemoryStream(buf, 1, length - 1, false))
+                    using (var r = new BinaryReader(ms))
+                        HandleHostPlayerState(sender, r);
+                    return;
+                }
+
+                if (type == (byte)PacketType.WeaponEvent)
+                {
+                    using (var ms = new MemoryStream(buf, 1, length - 1, false))
+                    using (var r = new BinaryReader(ms))
+                        HandleHostWeaponEvent(sender, r);
+                    return;
+                }
+
+                if (type == (byte)PacketType.PlayerStatus)
+                {
+                    using (var ms = new MemoryStream(buf, 1, length - 1, false))
+                    using (var r = new BinaryReader(ms))
+                        HandleHostPlayerStatus(sender, r);
+                    return;
+                }
+
+                if (type == (byte)PacketType.ReviveRequest)
+                {
+                    using (var ms = new MemoryStream(buf, 1, length - 1, false))
+                    using (var r = new BinaryReader(ms))
+                        HandleHostReviveRequest(sender, r);
+                    return;
+                }
+            }
+            else if (_peerId != CSteamID.Nil && sender != _peerId)
+            {
+                return;
+            }
+
+            byte sourceParticipantId = INVALID_PARTICIPANT_ID;
+            if (_isHost)
+                sourceParticipantId = GetDispatchParticipantIdForHostPeer(sender);
 
             using (var ms = new MemoryStream(buf, 1, length - 1, false))
             using (var r  = new BinaryReader(ms))
-                PacketDispatcher.Dispatch((PacketType)type, r);
+                PacketDispatcher.Dispatch((PacketType)type, r, sourceParticipantId);
         }
 
         // ── Send helpers ──────────────────────────────────────────────────────
@@ -849,6 +1279,54 @@ namespace CupheadOnline.Net
         public void SendEnemyState  (ref EnemyStatePacket   p, bool reliable = false) => Send(PacketType.EnemyState,   ref p, reliable);
         public void SendWeaponEvent (ref WeaponEventPacket  p) => Send(PacketType.WeaponEvent,  ref p, true);
         public void SendDamageEvent (ref DamageEventPacket  p) => Send(PacketType.DamageEvent,  ref p, true);
+        public void SendPlayerStatus(ref PlayerStatusPacket p) => Send(PacketType.PlayerStatus, ref p, true);
+        public void SendReviveRequest(ref ReviveRequestPacket p) => Send(PacketType.ReviveRequest, ref p, true);
+        public void SendReviveGrant(ref ReviveGrantPacket p) => Send(PacketType.ReviveGrant, ref p, true);
+        public bool SendDamageEventForParticipant(byte participantId, float damage, byte source, uint tick)
+        {
+            if (!_steamReady || !_isHost || _state != NetState.Connected || damage <= 0f)
+                return false;
+
+            var pkt = new DamageEventPacket
+            {
+                Damage = damage,
+                Source = source,
+                Tick = tick,
+            };
+
+            if (participantId == (byte)PlayerId.PlayerOne)
+            {
+                pkt.TargetPlayerId = (byte)PlayerId.PlayerOne;
+                Send(PacketType.DamageEvent, ref pkt, true);
+                return true;
+            }
+
+            CSteamID targetPeer;
+            if (!TryGetPeerForParticipant(participantId, out targetPeer))
+                return false;
+
+            pkt.TargetPlayerId = (byte)PlayerId.PlayerTwo;
+            SendToPeer(PacketType.DamageEvent, ref pkt, true, targetPeer);
+            return true;
+        }
+        public bool SendReviveGrantToParticipant(byte participantId, ref ReviveGrantPacket pkt)
+        {
+            if (!_steamReady || !_isHost || _state != NetState.Connected)
+                return false;
+
+            if (participantId == (byte)PlayerId.PlayerOne)
+            {
+                Send(PacketType.ReviveGrant, ref pkt, true);
+                return true;
+            }
+
+            CSteamID targetPeer;
+            if (!TryGetPeerForParticipant(participantId, out targetPeer))
+                return false;
+
+            SendToPeer(PacketType.ReviveGrant, ref pkt, true, targetPeer);
+            return true;
+        }
         public void SendSceneChange (ref SceneChangePacket  p) => Send(PacketType.SceneChange,  ref p, true);
         public void SendMenuSceneChange(ref MenuSceneChangePacket p) => Send(PacketType.MenuSceneChange, ref p, true);
         public void SendSaveSlotSync(ref SaveSlotSyncPacket p) => Send(PacketType.SaveSlotSync, ref p, true);
@@ -870,15 +1348,41 @@ namespace CupheadOnline.Net
             int len  = (int)_sendBuf.Length;
             var data = new byte[len];
             Buffer.BlockCopy(_sendBuf.GetBuffer(), 0, data, 0, len);
-            RawSend(data, reliable);
+            if (_isHost)
+                BroadcastToConnectedPeers(data, reliable, CSteamID.Nil);
+            else
+                RawSend(data, reliable);
+        }
+
+        void SendToPeer<T>(PacketType type, ref T pkt, bool reliable, CSteamID target) where T : struct, IPacket
+        {
+            if (!_steamReady || target == CSteamID.Nil)
+                return;
+            if (_state != NetState.Connected && type != PacketType.SessionStart)
+                return;
+
+            _sendBuf.SetLength(0);
+            _sendBuf.Position = 0;
+            _sendWriter.Write((byte)type);
+            pkt.Write(_sendWriter);
+            _sendWriter.Flush();
+            int len = (int)_sendBuf.Length;
+            var data = new byte[len];
+            Buffer.BlockCopy(_sendBuf.GetBuffer(), 0, data, 0, len);
+            RawSendTo(target, data, reliable);
         }
 
         void RawSend(byte[] data, bool reliable)
         {
+            RawSendTo(_peerId, data, reliable);
+        }
+
+        void RawSendTo(CSteamID target, byte[] data, bool reliable)
+        {
             if (!_steamReady) return;
-            if (_peerId == CSteamID.Nil) return;
+            if (target == CSteamID.Nil) return;
             var mode = reliable ? EP2PSend.k_EP2PSendReliable : EP2PSend.k_EP2PSendUnreliable;
-            SteamNetworking.SendP2PPacket(_peerId, data, (uint)data.Length, mode);
+            SteamNetworking.SendP2PPacket(target, data, (uint)data.Length, mode);
         }
 
         // ── Shutdown ──────────────────────────────────────────────────────────
@@ -894,6 +1398,16 @@ namespace CupheadOnline.Net
                 try { SteamNetworking.SendP2PPacket(_peerId, new[] { (byte)PacketType.Disconnect }, 1, EP2PSend.k_EP2PSendReliable); } catch { }
                 SteamNetworking.CloseP2PSessionWithUser(_peerId);
             }
+            if (_steamReady && _isHost)
+            {
+                foreach (var entry in _hostPeers.Values)
+                {
+                    if (entry == null || entry.SteamId == CSteamID.Nil || entry.SteamId == _peerId)
+                        continue;
+                    try { SteamNetworking.CloseP2PSessionWithUser(entry.SteamId); } catch { }
+                }
+                UpdateLobbyActivePeerData(CSteamID.Nil);
+            }
             if (_steamReady && _lobbyId != CSteamID.Nil)
             {
                 SteamMatchmaking.LeaveLobby(_lobbyId);
@@ -904,6 +1418,10 @@ namespace CupheadOnline.Net
             _isHost          = false;
             Latency          = 0;
             _state           = NetState.Idle;
+            _hostPeers.Clear();
+            _peerSessionParticipantIds.Clear();
+            _nextSessionParticipantId = 2;
+            _nextQueuePollTime = 0f;
             ConnectionHUD.Hide();
             MultiplayerSession.End();
             if (hadState)
@@ -942,6 +1460,513 @@ namespace CupheadOnline.Net
             Plugin.Log.LogWarning("[SteamNet] Connect(ip) ignored — use Steam invite.");
 
         // ── Helpers ──────────────────────────────────────────────────────────
+
+        bool TryBeginClientHandshakeFromLobby(bool forceStatus)
+        {
+            if (_isHost || !_steamReady || _lobbyId == CSteamID.Nil || _peerId == CSteamID.Nil)
+                return false;
+
+            if (_state != NetState.JoiningLobby && _state != NetState.WaitingInLobby)
+                return false;
+
+            ulong activePeerValue;
+            if (TryGetActiveLobbyPeer(out activePeerValue) && activePeerValue != 0UL && activePeerValue != SteamUser.GetSteamID().m_SteamID)
+            {
+                if (forceStatus || _state != NetState.WaitingInLobby)
+                    SetState(NetState.WaitingInLobby, BuildWaitingForOpenSlotStatus(activePeerValue));
+                return false;
+            }
+
+            SetState(NetState.WaitingWelcome, "Connecting to " + FriendName(_peerId) + "...");
+            RawSendTo(_peerId, new[] { (byte)PacketType.Hello }, reliable: true);
+            Plugin.Log.LogInfo("[SteamNet] Hello sent to " + FriendName(_peerId));
+            return true;
+        }
+
+        string BuildWaitingForOpenSlotStatus(ulong activePeerValue)
+        {
+            string activeName = "another player";
+            if (activePeerValue != 0UL)
+            {
+                string resolved = FriendName(new CSteamID(activePeerValue));
+                if (!string.IsNullOrEmpty(resolved) && resolved != "Unknown Player")
+                    activeName = resolved;
+            }
+
+            return "Lobby joined.\n"
+                + activeName
+                + " is using the active gameplay slot.\nWaiting for the host to open the next slot...";
+        }
+
+        bool TryGetActiveLobbyPeer(out ulong activePeerValue)
+        {
+            activePeerValue = 0UL;
+            if (!_steamReady || _lobbyId == CSteamID.Nil)
+                return false;
+
+            string raw = SteamMatchmaking.GetLobbyData(_lobbyId, LOBBY_KEY_ACTIVE_PEER);
+            return ulong.TryParse(raw, out activePeerValue) && activePeerValue != 0UL;
+        }
+
+        void UpdateLobbyActivePeerData()
+        {
+            UpdateLobbyActivePeerData(_peerId);
+        }
+
+        void UpdateLobbyActivePeerData(CSteamID activePeer)
+        {
+            if (!_steamReady || !_isHost || _lobbyId == CSteamID.Nil)
+                return;
+
+            SteamMatchmaking.SetLobbyData(_lobbyId, LOBBY_KEY_ACTIVE_MODE, "single-primary");
+            SteamMatchmaking.SetLobbyData(
+                _lobbyId,
+                LOBBY_KEY_ACTIVE_PEER,
+                activePeer == CSteamID.Nil ? string.Empty : activePeer.m_SteamID.ToString());
+        }
+
+        string BuildLobbyPresenceLine(CSteamID member, CSteamID localId)
+        {
+            string name = member == localId ? "You" : FriendName(member);
+            if (string.IsNullOrEmpty(name))
+                name = "Unknown Player";
+
+            byte participantId;
+            bool hasParticipantId = TryGetLobbyMemberParticipantId(member, out participantId);
+            int selection = hasParticipantId
+                ? GetParticipantColorSelection(participantId)
+                : GetLobbyMemberPreferredColorSelection(member);
+
+            string line = PlayerColorSync.GetSwatchRichText(selection, hasParticipantId ? (byte?)participantId : null);
+            if (hasParticipantId)
+                line += " " + PlayerColorSync.GetParticipantLabel(participantId);
+
+            line += " " + name + GetLobbyMemberSuffix(member, localId);
+            return line;
+        }
+
+        string GetLobbyMemberSuffix(CSteamID member, CSteamID localId)
+        {
+            if (member == localId)
+            {
+                if (_isHost)
+                    return " (Host)";
+                if (!_isHost && _state == NetState.WaitingInLobby)
+                    return " (Queued)";
+                if (!_isHost && _state == NetState.WaitingWelcome)
+                    return " (Connecting\u2026)";
+                if (!_isHost && _state == NetState.Connected)
+                    return " (You)";
+                return string.Empty;
+            }
+
+            if (_isHost)
+            {
+                HostPeerInfo info;
+                if (_hostPeers.TryGetValue(member.m_SteamID, out info))
+                    return " (" + DescribeHostPeerStage(info) + ")";
+
+                if (member == _peerId && _state == NetState.Connected)
+                    return " (Active)";
+
+                return string.Empty;
+            }
+
+            ulong activePeerValue;
+            if (TryGetActiveLobbyPeer(out activePeerValue) && member.m_SteamID == activePeerValue)
+                return " (Active)";
+
+            if (member == _peerId)
+            {
+                if (_state == NetState.WaitingWelcome)
+                    return " (Connecting\u2026)";
+                if (_state == NetState.Connected)
+                    return " (Host)";
+            }
+
+            return " (Queued)";
+        }
+
+        string DescribeHostPeerStage(HostPeerInfo info)
+        {
+            if (info == null)
+                return "Unknown";
+
+            switch (info.Stage)
+            {
+                case HostPeerStage.WaitingHello:
+                    return "Connecting";
+                case HostPeerStage.WaitingReady:
+                    return "Authorizing";
+                case HostPeerStage.Connected:
+                    return info.SteamId == _peerId ? "Active" : "Connected";
+                default:
+                    return info.SteamId == _peerId ? "Connecting" : "Queued";
+            }
+        }
+
+        int GetLobbyMemberCount()
+        {
+            if (!_steamReady || _lobbyId == CSteamID.Nil)
+                return 0;
+
+            try { return SteamMatchmaking.GetNumLobbyMembers(_lobbyId); }
+            catch { return 0; }
+        }
+
+        int CountHostPeers(HostPeerStage stage)
+        {
+            int count = 0;
+            foreach (var info in _hostPeers.Values)
+            {
+                if (info != null && info.Stage == stage)
+                    count++;
+            }
+            return count;
+        }
+
+        int CountPendingHostPeers()
+        {
+            int count = 0;
+            foreach (var info in _hostPeers.Values)
+            {
+                if (info != null && info.Stage != HostPeerStage.Connected)
+                    count++;
+            }
+            return count;
+        }
+
+        string BuildCurrentPeerSummary()
+        {
+            if (_isHost)
+            {
+                if (_peerId != CSteamID.Nil && (_state == NetState.WaitingHello || _state == NetState.WaitingReady))
+                {
+                    if (PendingPeerCount > 1)
+                        return FriendName(_peerId) + " connecting, " + (PendingPeerCount - 1) + " queued";
+                    return FriendName(_peerId) + " connecting";
+                }
+
+                if (_peerId != CSteamID.Nil && _state == NetState.Connected)
+                {
+                    int extraConnected = Mathf.Max(0, ConnectedPeerCount - 1);
+                    if (extraConnected > 0 && PendingPeerCount > 0)
+                        return FriendName(_peerId) + " active, " + extraConnected + " extra connected, " + PendingPeerCount + " queued";
+                    if (extraConnected > 0)
+                        return FriendName(_peerId) + " active, " + extraConnected + " extra connected";
+                    if (PendingPeerCount > 0)
+                        return FriendName(_peerId) + " active, " + PendingPeerCount + " queued";
+                    return FriendName(_peerId) + " active";
+                }
+
+                if (PendingPeerCount > 0)
+                    return PendingPeerCount + " queued in lobby";
+
+                return "No gameplay peer connected";
+            }
+
+            if (_state == NetState.WaitingInLobby)
+                return "Queued for the next gameplay slot";
+            if (_state == NetState.WaitingWelcome)
+                return "Connecting to " + FriendName(_peerId);
+            if (_state == NetState.Connected)
+                return "Connected to " + FriendName(_peerId);
+            return string.Empty;
+        }
+
+        string BuildHostPeerDiagnostics()
+        {
+            if (!_isHost || _hostPeers.Count == 0)
+                return string.Empty;
+
+            var sb = new System.Text.StringBuilder();
+            foreach (var entry in _hostPeers.Values)
+            {
+                if (entry == null)
+                    continue;
+
+                if (sb.Length > 0)
+                    sb.AppendLine();
+
+                sb.Append(entry.CachedName);
+                sb.Append(" [");
+                sb.Append(entry.SteamId.m_SteamID);
+                sb.Append("] - ");
+                sb.Append(DescribeHostPeerStage(entry));
+            }
+            return sb.ToString();
+        }
+
+        HostPeerInfo GetOrCreateHostPeer(CSteamID id)
+        {
+            HostPeerInfo info;
+            if (!_hostPeers.TryGetValue(id.m_SteamID, out info))
+            {
+                info = new HostPeerInfo
+                {
+                    SteamId = id,
+                    Stage = HostPeerStage.Lobby,
+                    LastReceiveUtc = DateTime.UtcNow,
+                    StageEnteredTime = Time.realtimeSinceStartup,
+                    CachedName = FriendName(id),
+                };
+                _hostPeers[id.m_SteamID] = info;
+            }
+            else if (string.IsNullOrEmpty(info.CachedName) || info.CachedName == "Unknown Player")
+            {
+                info.CachedName = FriendName(id);
+            }
+
+            return info;
+        }
+
+        void UpdateHostPeerStage(CSteamID id, HostPeerStage stage)
+        {
+            var info = GetOrCreateHostPeer(id);
+            if (info.Stage != stage)
+            {
+                info.Stage = stage;
+                info.StageEnteredTime = Time.realtimeSinceStartup;
+            }
+            info.LastReceiveUtc = DateTime.UtcNow;
+            info.CachedName = FriendName(id);
+        }
+
+        void RemoveHostPeer(CSteamID id)
+        {
+            if (id == CSteamID.Nil)
+                return;
+
+            ReleaseSessionParticipantIdForPeer(id);
+            _hostPeers.Remove(id.m_SteamID);
+        }
+
+        void RefreshHostLobbyRoster()
+        {
+            if (!_isHost || !_steamReady || _lobbyId == CSteamID.Nil)
+                return;
+
+            var localId = SteamUser.GetSteamID();
+            var liveMembers = new HashSet<ulong>();
+            var publishedParticipants = new HashSet<byte>();
+            int lobbyMembers = GetLobbyMemberCount();
+            for (int i = 0; i < lobbyMembers; i++)
+            {
+                CSteamID member = SteamMatchmaking.GetLobbyMemberByIndex(_lobbyId, i);
+                if (member == localId)
+                    continue;
+
+                liveMembers.Add(member.m_SteamID);
+                var info = GetOrCreateHostPeer(member);
+                info.CachedName = FriendName(member);
+                if (member == _peerId)
+                {
+                    switch (_state)
+                    {
+                        case NetState.WaitingHello:
+                            info.Stage = HostPeerStage.WaitingHello;
+                            break;
+                        case NetState.WaitingReady:
+                            info.Stage = HostPeerStage.WaitingReady;
+                            break;
+                        case NetState.Connected:
+                            info.Stage = HostPeerStage.Connected;
+                            break;
+                        default:
+                            if (info.Stage != HostPeerStage.Connected)
+                                info.Stage = HostPeerStage.Lobby;
+                            break;
+                    }
+                }
+                else if (info.Stage != HostPeerStage.Connected)
+                {
+                    info.Stage = HostPeerStage.Lobby;
+                }
+            }
+
+            PublishLobbyParticipantSlot((byte)PlayerId.PlayerOne, localId, publishedParticipants);
+            if (_peerId != CSteamID.Nil && IsLobbyMember(_peerId))
+                PublishLobbyParticipantSlot((byte)PlayerId.PlayerTwo, _peerId, publishedParticipants);
+
+            foreach (var entry in _peerSessionParticipantIds)
+            {
+                if (entry.Key == _peerId.m_SteamID || entry.Value == INVALID_PARTICIPANT_ID)
+                    continue;
+
+                var member = new CSteamID(entry.Key);
+                if (!IsLobbyMember(member))
+                    continue;
+
+                PublishLobbyParticipantSlot(entry.Value, member, publishedParticipants);
+            }
+
+            ClearLobbyParticipantSlots(publishedParticipants);
+
+            var removed = new List<ulong>();
+            foreach (var key in _hostPeers.Keys)
+            {
+                if (!liveMembers.Contains(key))
+                    removed.Add(key);
+            }
+
+            for (int i = 0; i < removed.Count; i++)
+                RemoveHostPeer(new CSteamID(removed[i]));
+        }
+
+        void PublishLocalLobbyMemberData()
+        {
+            if (!_steamReady || _lobbyId == CSteamID.Nil)
+                return;
+
+            try
+            {
+                SteamMatchmaking.SetLobbyMemberData(
+                    _lobbyId,
+                    LOBBY_MEMBER_KEY_COLOR,
+                    PlayerColorSync.NormalizeSelection(Plugin.PreferredPlayerColorSelection).ToString());
+            }
+            catch (Exception ex)
+            {
+                Plugin.LogVerbose("[SteamNet] Failed to publish lobby member appearance: " + ex.Message);
+            }
+        }
+
+        void PublishLobbyParticipantSlot(byte participantId, CSteamID member, HashSet<byte> publishedParticipants)
+        {
+            if (!_steamReady || !_isHost || _lobbyId == CSteamID.Nil || member == CSteamID.Nil)
+                return;
+
+            SteamMatchmaking.SetLobbyData(
+                _lobbyId,
+                LOBBY_KEY_PARTICIPANT_PREFIX + participantId,
+                member.m_SteamID.ToString());
+
+            if (publishedParticipants != null)
+                publishedParticipants.Add(participantId);
+        }
+
+        void ClearLobbyParticipantSlots(HashSet<byte> publishedParticipants)
+        {
+            if (!_steamReady || !_isHost || _lobbyId == CSteamID.Nil)
+                return;
+
+            for (byte participantId = 0; participantId < MAX_LOBBY_MEMBERS; participantId++)
+            {
+                if (publishedParticipants != null && publishedParticipants.Contains(participantId))
+                    continue;
+
+                SteamMatchmaking.DeleteLobbyData(_lobbyId, LOBBY_KEY_PARTICIPANT_PREFIX + participantId);
+            }
+        }
+
+        int GetLobbyMemberPreferredColorSelection(CSteamID member)
+        {
+            if (!_steamReady || _lobbyId == CSteamID.Nil || member == CSteamID.Nil)
+                return PlayerColorSync.AutoSelection;
+
+            string raw = SteamMatchmaking.GetLobbyMemberData(_lobbyId, member, LOBBY_MEMBER_KEY_COLOR);
+            int parsed;
+            if (!int.TryParse(raw, out parsed))
+                return PlayerColorSync.AutoSelection;
+
+            return PlayerColorSync.NormalizeSelection(parsed);
+        }
+
+        bool TryGetLobbyMemberParticipantId(CSteamID member, out byte participantId)
+        {
+            participantId = INVALID_PARTICIPANT_ID;
+            if (!_steamReady || _lobbyId == CSteamID.Nil || member == CSteamID.Nil)
+                return false;
+
+            CSteamID localId = SteamUser.GetSteamID();
+            if (_isHost && member == localId)
+            {
+                participantId = (byte)PlayerId.PlayerOne;
+                return true;
+            }
+
+            if (_isHost && member == _peerId && _peerId != CSteamID.Nil)
+            {
+                participantId = (byte)PlayerId.PlayerTwo;
+                return true;
+            }
+
+            if (!_isHost && member == _peerId && _peerId != CSteamID.Nil)
+            {
+                participantId = (byte)PlayerId.PlayerOne;
+                return true;
+            }
+
+            if (!_isHost && _state == NetState.Connected && member == localId)
+            {
+                participantId = (byte)PlayerId.PlayerTwo;
+                return true;
+            }
+
+            for (byte candidate = 0; candidate < MAX_LOBBY_MEMBERS; candidate++)
+            {
+                ulong mappedSteamId;
+                if (!TryGetLobbyParticipantSteamId(candidate, out mappedSteamId))
+                    continue;
+
+                if (mappedSteamId != member.m_SteamID)
+                    continue;
+
+                participantId = candidate;
+                return true;
+            }
+
+            return false;
+        }
+
+        bool TryGetLobbyMemberForParticipant(byte participantId, out CSteamID member)
+        {
+            member = CSteamID.Nil;
+            if (!_steamReady || _lobbyId == CSteamID.Nil || participantId == INVALID_PARTICIPANT_ID)
+                return false;
+
+            CSteamID localId = SteamUser.GetSteamID();
+            if (_isHost && participantId == (byte)PlayerId.PlayerOne)
+            {
+                member = localId;
+                return true;
+            }
+
+            if (!_isHost && participantId == (byte)PlayerId.PlayerTwo && _state == NetState.Connected)
+            {
+                member = localId;
+                return true;
+            }
+
+            if (participantId == (byte)PlayerId.PlayerOne && !_isHost && _peerId != CSteamID.Nil)
+            {
+                member = _peerId;
+                return true;
+            }
+
+            if (participantId == (byte)PlayerId.PlayerTwo && _isHost && _peerId != CSteamID.Nil)
+            {
+                member = _peerId;
+                return true;
+            }
+
+            ulong mappedSteamId;
+            if (!TryGetLobbyParticipantSteamId(participantId, out mappedSteamId) || mappedSteamId == 0UL)
+                return false;
+
+            member = new CSteamID(mappedSteamId);
+            return member != CSteamID.Nil;
+        }
+
+        bool TryGetLobbyParticipantSteamId(byte participantId, out ulong steamIdValue)
+        {
+            steamIdValue = 0UL;
+            if (!_steamReady || _lobbyId == CSteamID.Nil)
+                return false;
+
+            string raw = SteamMatchmaking.GetLobbyData(_lobbyId, LOBBY_KEY_PARTICIPANT_PREFIX + participantId);
+            return ulong.TryParse(raw, out steamIdValue) && steamIdValue != 0UL;
+        }
 
         void SetState(NetState s, string status)
         {
@@ -1114,6 +2139,10 @@ namespace CupheadOnline.Net
             _lobbyId = CSteamID.Nil;
             _isHost = false;
             _pingSentPending = false;
+            _hostPeers.Clear();
+            _peerSessionParticipantIds.Clear();
+            _nextSessionParticipantId = 2;
+            _nextQueuePollTime = 0f;
             _steamUnavailableStatus = BuildSteamUnavailableStatus();
             Plugin.Log.LogError("[SteamNet] Steam runtime failure while " + context + ": " + ex.Message);
             ConnectionHUD.Hide();

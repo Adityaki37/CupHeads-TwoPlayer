@@ -38,15 +38,11 @@ namespace CupheadOnline.Patches
 
             var player = __instance.GetComponent<AbstractPlayerController>();
             if (player == null) return;
-
-            var pkt = new DamageEventPacket
-            {
-                TargetPlayerId = (byte)player.id,
-                Damage         = info.damage,
-                Source         = (byte)info.damageSource,
-                Tick           = MultiplayerSession.Tick,
-            };
-            Plugin.Net.SendDamageEvent(ref pkt);
+            Plugin.Net.SendDamageEventForParticipant(
+                (byte)player.id,
+                info.damage,
+                (byte)info.damageSource,
+                MultiplayerSession.Tick);
         }
     }
 }

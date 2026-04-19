@@ -10,7 +10,7 @@ namespace CupheadOnline.Diagnostics
         public static string Export()
         {
             string root = Path.Combine(
-                Path.Combine(Paths.BepInExRootPath, "CupheadOnline"),
+                Path.Combine(Paths.BepInExRootPath, "CupHeads"),
                 "Reports");
             Directory.CreateDirectory(root);
 
@@ -38,7 +38,7 @@ namespace CupheadOnline.Diagnostics
         {
             var nl = Environment.NewLine;
             var sb = new StringBuilder();
-            sb.AppendLine("CupheadOnline Bug Report");
+            sb.AppendLine("CupHeads Bug Report");
             sb.AppendLine("Generated: " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             sb.AppendLine("Game Root: " + Paths.GameRootPath);
             sb.AppendLine("BepInEx Root: " + Paths.BepInExRootPath);
