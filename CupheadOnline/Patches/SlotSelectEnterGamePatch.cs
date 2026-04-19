@@ -112,7 +112,42 @@ namespace CupheadOnline.Patches
                 return false;
             }
 
-            EnterGameMethod.Invoke(screen, null);
+            bool suppressVanillaSceneBroadcast = TrySendImmediateLaunchScene(ref packet);
+            if (suppressVanillaSceneBroadcast)
+                SceneSyncState.SuppressMenuSceneBroadcast = true;
+
+            try
+            {
+                EnterGameMethod.Invoke(screen, null);
+            }
+            finally
+            {
+                if (suppressVanillaSceneBroadcast)
+                    SceneSyncState.SuppressMenuSceneBroadcast = false;
+            }
+            return true;
+        }
+
+        static bool TrySendImmediateLaunchScene(ref SaveSlotSyncPacket packet)
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected || !MultiplayerSession.IsHost)
+                return false;
+            if (packet.IsEmpty)
+                return false;
+            if (!System.Enum.IsDefined(typeof(Scenes), packet.CurrentMapScene))
+                return false;
+
+            var pkt = new MenuSceneChangePacket
+            {
+                SceneEnum = packet.CurrentMapScene,
+                TransitionStart = (byte)SceneLoader.Transition.Fade,
+                TransitionEnd = (byte)SceneLoader.Transition.Iris,
+                Icon = (byte)SceneLoader.Icon.Hourglass,
+                RngSeed = Sync.RngSync.NextSeed(),
+            };
+            Plugin.Net.SendMenuSceneChange(ref pkt);
+            Sync.SessionSync.BroadcastSessionSnapshot(true);
+            Plugin.Log.LogInfo("[SaveSync] Sent immediate lobby launch scene " + ((Scenes)packet.CurrentMapScene) + ".");
             return true;
         }
 

@@ -276,6 +276,32 @@ function resolveBundledFile(fileName) {
   return path.join(getBundledAssetRoot(), fileName);
 }
 
+function describeModFileCopyFailure(err, file) {
+  const target = file && file.destinationPath ? file.destinationPath : 'the Cuphead plugin folder';
+  const code = err && err.code ? String(err.code) : 'UNKNOWN';
+  return [
+    'Windows blocked the installer while refreshing ' + (file ? file.target : 'the mod DLL') + '.',
+    '',
+    'Close Cuphead and Steam if either one is using the DLL, then run CupHeads.exe as Administrator and press Install again.',
+    '',
+    'Target: ' + target,
+    'Error: ' + code + (err && err.message ? ' - ' + err.message : ''),
+  ].join('\n');
+}
+
+function copyBundledModFile(file) {
+  const tempPath = file.destinationPath + '.tmp-' + process.pid;
+
+  try {
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch { /* best-effort */ }
+    fs.copyFileSync(file.sourcePath, tempPath);
+    fs.renameSync(tempPath, file.destinationPath);
+  } catch (err) {
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch { /* best-effort */ }
+    throw new Error(describeModFileCopyFailure(err, file));
+  }
+}
+
 ipcMain.handle('detect-cuphead', () => {
   try {
     return { path: findCuphead(), error: null };
@@ -607,7 +633,7 @@ ipcMain.on('install', async (event, { cupheadDir, skipBepInEx }) => {
 
     for (let i = 0; i < bundledFiles.length; i += 1) {
       const file = bundledFiles[i];
-      fs.copyFileSync(file.sourcePath, file.destinationPath);
+      copyBundledModFile(file);
 
       const progress = Math.round(((i + 1) / bundledFiles.length) * 100);
       send('step', {

@@ -4,6 +4,7 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using CupheadOnline.Net;
+using CupheadOnline.UI;
 
 namespace CupheadOnline.Sync
 {
@@ -35,6 +36,8 @@ namespace CupheadOnline.Sync
         private static float _lastHostSnapshotAt = -1f;
         private static float _lastRecoveryRequestedAt = -1f;
         private static float _lastRecoveryBundleAt = -1f;
+        private static float _lastAutoFollowAt = -1f;
+        private static string _lastAutoFollowTarget = string.Empty;
         private static int _sceneMismatchStreak;
         private static int _recoveryRequestCount;
         private static int _recoveryBundleCount;
@@ -214,6 +217,17 @@ namespace CupheadOnline.Sync
             _lastHostSnapshotAt = Time.unscaledTime;
             if (pkt.SaveRevision != 0)
                 _saveRevision = pkt.SaveRevision;
+
+            if (pkt.HasTrackedSave && pkt.SaveSlotIndex != byte.MaxValue)
+            {
+                _trackedSaveSlot = pkt.SaveSlotIndex;
+                if (IsDefinedScene(pkt.CurrentMapScene))
+                    _trackedMapScene = (Scenes)pkt.CurrentMapScene;
+                _trackedSaveEmpty = false;
+                _hasTrackedSave = true;
+            }
+
+            TryAutoFollowHostSnapshot(pkt);
             EvaluateDesync();
         }
 
@@ -825,8 +839,8 @@ namespace CupheadOnline.Sync
 
             if (_sceneMismatchStreak >= 2)
             {
-                _desyncSummary = "Scene mismatch - ask the host for a resync.";
-                _desyncSeverity = SessionIssueSeverity.Error;
+                _desyncSummary = "Scene mismatch detected - auto-following host.";
+                _desyncSeverity = SessionIssueSeverity.Warning;
                 return;
             }
 
@@ -887,6 +901,97 @@ namespace CupheadOnline.Sync
             return flags;
         }
 
+        private static void TryAutoFollowHostSnapshot(SessionSnapshotPacket snapshot)
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected || MultiplayerSession.IsHost)
+                return;
+
+            string localScene = GetActiveSceneName();
+            if (string.IsNullOrEmpty(snapshot.SceneName)
+             || string.IsNullOrEmpty(localScene)
+             || string.Equals(snapshot.SceneName, localScene, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            string targetKey = snapshot.IsInLevel
+                ? "level:" + snapshot.CurrentLevel
+                : "scene:" + snapshot.SceneName + ":" + snapshot.CurrentMapScene;
+            if (targetKey == _lastAutoFollowTarget && Time.unscaledTime - _lastAutoFollowAt < 2.5f)
+                return;
+
+            if (snapshot.IsInLevel && Enum.IsDefined(typeof(Levels), snapshot.CurrentLevel))
+            {
+                _lastAutoFollowTarget = targetKey;
+                _lastAutoFollowAt = Time.unscaledTime;
+                ConnectionHUD.Show("Following host into level...");
+                Plugin.Log.LogInfo("[Session] Auto-following host level " + ((Levels)snapshot.CurrentLevel) + ".");
+                SceneLoader.LoadLevel((Levels)snapshot.CurrentLevel, SceneLoader.Transition.Iris);
+                return;
+            }
+
+            Scenes targetScene;
+            if (!TryResolveSnapshotScene(snapshot, out targetScene))
+                return;
+            if (!ShouldAutoFollowScene(targetScene))
+                return;
+
+            _lastAutoFollowTarget = targetKey;
+            _lastAutoFollowAt = Time.unscaledTime;
+            ConnectionHUD.Show("Following host scene...");
+            Plugin.Log.LogInfo("[Session] Auto-following host scene " + targetScene + ".");
+            SceneLoader.LoadScene(
+                targetScene,
+                SceneLoader.Transition.Iris,
+                SceneLoader.Transition.Iris,
+                SceneLoader.Icon.Hourglass,
+                null);
+        }
+
+        private static bool TryResolveSnapshotScene(SessionSnapshotPacket snapshot, out Scenes scene)
+        {
+            if (TryParseSceneName(snapshot.SceneName, out scene))
+                return true;
+
+            if (IsDefinedScene(snapshot.CurrentMapScene))
+            {
+                scene = (Scenes)snapshot.CurrentMapScene;
+                return true;
+            }
+
+            scene = Scenes.scene_title;
+            return false;
+        }
+
+        private static bool TryParseSceneName(string sceneName, out Scenes scene)
+        {
+            if (!string.IsNullOrEmpty(sceneName))
+            {
+                foreach (Scenes candidate in Enum.GetValues(typeof(Scenes)))
+                {
+                    if (string.Equals(candidate.ToString(), sceneName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        scene = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            scene = Scenes.scene_title;
+            return false;
+        }
+
+        private static bool IsDefinedScene(int sceneValue)
+        {
+            return Enum.IsDefined(typeof(Scenes), sceneValue);
+        }
+
+        private static bool ShouldAutoFollowScene(Scenes scene)
+        {
+            return scene != Scenes.scene_start
+                && scene != Scenes.scene_title
+                && scene != Scenes.scene_slot_select
+                && scene != Scenes.scene_menu;
+        }
+
         private static string GetActiveSceneName()
         {
             try
@@ -927,6 +1032,8 @@ namespace CupheadOnline.Sync
             _lastHostSnapshotAt = -1f;
             _lastRecoveryRequestedAt = -1f;
             _lastRecoveryBundleAt = -1f;
+            _lastAutoFollowAt = -1f;
+            _lastAutoFollowTarget = string.Empty;
             _sceneMismatchStreak = 0;
             _recoveryRequestCount = 0;
             _recoveryBundleCount = 0;
@@ -956,6 +1063,8 @@ namespace CupheadOnline.Sync
             _lastHostSnapshotAt = -1f;
             _lastRecoveryRequestedAt = -1f;
             _lastRecoveryBundleAt = -1f;
+            _lastAutoFollowAt = -1f;
+            _lastAutoFollowTarget = string.Empty;
             _sceneMismatchStreak = 0;
             _recoveryRequestCount = 0;
             _recoveryBundleCount = 0;

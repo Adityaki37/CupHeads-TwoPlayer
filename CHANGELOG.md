@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.5 - 2026-04-19
+
+- Added an explicit host launch scene packet when `START GAME` is pressed so guests are pulled into the selected save/map immediately.
+- Added automatic client scene-follow from host snapshots, so scene mismatch recovery now tries to move the guest to the host scene instead of requiring manual resync.
+- Improved the installer DLL-refresh failure message so blocked writes explain to close Cuphead/Steam and run the installer as Administrator instead of showing a raw `copyfile` error.
+
 ## v1.2.4 - 2026-04-19
 
 - Removed the guest ready-up gate from multiplayer starts. The host can now press `START GAME` once a save slot is selected, and the guest follows automatically.
