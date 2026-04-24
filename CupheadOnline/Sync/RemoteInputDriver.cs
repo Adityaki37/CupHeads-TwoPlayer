@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CupheadOnline.Net;
+using UnityEngine;
 
 namespace CupheadOnline.Sync
 {
@@ -18,9 +19,13 @@ namespace CupheadOnline.Sync
             public bool HasReceivedTick;
             public uint LastReceivedTick;
             public int StallFrames;
+            public uint DownEdges;
+            public uint UpEdges;
+            public readonly int[] DownServedFrames = CreateServedFrameBuffer();
+            public readonly int[] UpServedFrames = CreateServedFrameBuffer();
         }
 
-        const int MAX_STALL = 6; // ~100 ms at 60 Hz before inputs zeroed
+        const int MAX_STALL = 12; // ~200 ms at 60 Hz before inputs are released
 
         static readonly Dictionary<byte, RemoteInputState> _states =
             new Dictionary<byte, RemoteInputState>(2);
@@ -42,12 +47,7 @@ namespace CupheadOnline.Sync
             if (state.HasReceivedTick)
             {
                 if (pkt.Tick == state.LastReceivedTick)
-                {
-                    state.Current = pkt;
-                    state.HasData = true;
-                    state.StallFrames = 0;
                     return;
-                }
 
                 if (!NetTick.IsNewer(pkt.Tick, state.LastReceivedTick))
                     return;
@@ -63,6 +63,7 @@ namespace CupheadOnline.Sync
             state.HasReceivedTick = true;
             state.LastReceivedTick = pkt.Tick;
             state.StallFrames = 0;
+            RecomputeEdges(state);
         }
 
         public static void Apply(PlayerId playerId, InputFramePacket pkt)
@@ -100,9 +101,7 @@ namespace CupheadOnline.Sync
             if (!_states.TryGetValue(participantId, out state) || !state.HasData)
                 return false;
 
-            bool currentPressed = state.Current.IsPressed(button);
-            bool previousPressed = state.Previous.IsPressed(button);
-            return currentPressed && !previousPressed;
+            return ConsumeEdgeForFrame(state.DownEdges, state.DownServedFrames, button);
         }
 
         public static bool WasReleasedThisFrame(byte participantId, CupheadButton button)
@@ -111,9 +110,7 @@ namespace CupheadOnline.Sync
             if (!_states.TryGetValue(participantId, out state) || !state.HasData)
                 return false;
 
-            bool currentPressed = state.Current.IsPressed(button);
-            bool previousPressed = state.Previous.IsPressed(button);
-            return !currentPressed && previousPressed;
+            return ConsumeEdgeForFrame(state.UpEdges, state.UpServedFrames, button);
         }
 
         public static bool IsPressed(byte participantId, CupheadButton button)
@@ -143,6 +140,10 @@ namespace CupheadOnline.Sync
                 state.Previous = state.Current;
                 state.Current = default(InputFramePacket);
                 state.HasData = false;
+                state.DownEdges = 0u;
+                state.UpEdges = 0u;
+                ResetServedFrames(state.DownServedFrames);
+                ResetServedFrames(state.UpServedFrames);
             }
         }
 
@@ -175,6 +176,50 @@ namespace CupheadOnline.Sync
                 _states[participantId] = state;
             }
             return state;
+        }
+
+        static void RecomputeEdges(RemoteInputState state)
+        {
+            state.DownEdges = state.Current.Buttons & ~state.Previous.Buttons;
+            state.UpEdges = state.Previous.Buttons & ~state.Current.Buttons;
+            ResetServedFrames(state.DownServedFrames);
+            ResetServedFrames(state.UpServedFrames);
+        }
+
+        static bool ConsumeEdgeForFrame(uint edges, int[] servedFrames, CupheadButton button)
+        {
+            int buttonIndex = (int)button;
+            if (buttonIndex < 0 || buttonIndex >= 32)
+                return false;
+
+            uint mask = 1u << buttonIndex;
+            if ((edges & mask) == 0u)
+                return false;
+
+            int frame = Time.frameCount;
+            if (servedFrames[buttonIndex] == frame)
+                return true;
+            if (servedFrames[buttonIndex] >= 0)
+                return false;
+
+            servedFrames[buttonIndex] = frame;
+            return true;
+        }
+
+        static int[] CreateServedFrameBuffer()
+        {
+            var frames = new int[32];
+            ResetServedFrames(frames);
+            return frames;
+        }
+
+        static void ResetServedFrames(int[] frames)
+        {
+            if (frames == null)
+                return;
+
+            for (int i = 0; i < frames.Length; i++)
+                frames[i] = -1;
         }
     }
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.2.12 - 2026-04-24
+
+- Fixed remote button-edge handling so `GetButtonDown` and `GetButtonUp` behave like real per-frame inputs instead of repeating until another network packet arrives.
+- Added gentle host-authoritative correction for the client's own gameplay slot, reducing drift where host and guest appear to split into separate solo realities.
+- Synced `DamageInfo.stoneTime` through host damage events so stun/status-style hits are authorized the same way as normal damage.
+- Added stale/invalid guards for host snapshots, save revisions, scene loads, weapon events, damage events, and revive grants to prevent older packets from rewinding newer gameplay.
+- Hardened status, loadout, revive, and enemy sync paths against missing player objects during scene transitions.
+
 ## v1.2.11 - 2026-04-23
 
 - Registered the deterministic `Rand.GetValue` Harmony patches in the live patch pass so seeded scene RNG now actually drives boss patterns, enemy spawns, and other random gameplay the same way on both peers.

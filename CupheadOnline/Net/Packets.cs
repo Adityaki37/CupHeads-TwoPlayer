@@ -146,6 +146,7 @@ namespace CupheadOnline.Net
     {
         public byte TargetPlayerId;
         public float Damage;
+        public float StoneTime;
         public byte Source;
         public uint Tick;
 
@@ -153,6 +154,7 @@ namespace CupheadOnline.Net
         {
             w.Write(TargetPlayerId);
             w.Write(Damage);
+            w.Write(StoneTime);
             w.Write(Source);
             w.Write(Tick);
         }
@@ -161,6 +163,7 @@ namespace CupheadOnline.Net
         {
             TargetPlayerId = r.ReadByte();
             Damage = r.ReadSingle();
+            StoneTime = r.ReadSingle();
             Source = r.ReadByte();
             Tick = r.ReadUInt32();
         }

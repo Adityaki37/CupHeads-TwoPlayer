@@ -65,7 +65,7 @@ namespace CupheadOnline.Sync
 
             if (participantId <= (byte)PlayerId.PlayerTwo)
             {
-                var player = PlayerManager.GetPlayer((PlayerId)participantId);
+                var player = GetPlayerSafe((PlayerId)participantId);
                 if (player != null && player.stats != null)
                 {
                     status = new ParticipantStatus
@@ -116,7 +116,7 @@ namespace CupheadOnline.Sync
 
         public static bool TryBuildLocalPacket(PlayerId playerId, out PlayerStatusPacket pkt)
         {
-            return TryBuildLocalPacket(PlayerManager.GetPlayer(playerId), out pkt);
+            return TryBuildLocalPacket(GetPlayerSafe(playerId), out pkt);
         }
 
         public static void CaptureLocal(AbstractPlayerController player)
@@ -130,7 +130,7 @@ namespace CupheadOnline.Sync
 
         public static void CaptureLocal(PlayerId playerId)
         {
-            CaptureLocal(PlayerManager.GetPlayer(playerId));
+            CaptureLocal(GetPlayerSafe(playerId));
         }
 
         public static void PushLocalStatus(AbstractPlayerController player)
@@ -150,7 +150,7 @@ namespace CupheadOnline.Sync
 
             if (participantId <= (byte)PlayerId.PlayerTwo)
             {
-                var player = PlayerManager.GetPlayer((PlayerId)participantId);
+                var player = GetPlayerSafe((PlayerId)participantId);
                 if (player == null)
                     return false;
 
@@ -329,6 +329,18 @@ namespace CupheadOnline.Sync
             if (player.id == PlayerId.PlayerTwo)
                 return playerOneIsMugman ? "Cuphead" : "Mugman";
             return "Cuphead";
+        }
+
+        static AbstractPlayerController GetPlayerSafe(PlayerId playerId)
+        {
+            try
+            {
+                return PlayerManager.GetPlayer(playerId);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

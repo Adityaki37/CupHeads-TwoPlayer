@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using CupheadOnline.Net;
 
@@ -16,8 +17,19 @@ namespace CupheadOnline.Sync
     /// </summary>
     public static class RemoteWeaponReplicator
     {
+        static readonly Dictionary<byte, uint> _lastEventTicks =
+            new Dictionary<byte, uint>(4);
+
+        static RemoteWeaponReplicator()
+        {
+            MultiplayerSession.OnSessionEnded += Reset;
+        }
+
         public static void Apply(WeaponEventPacket pkt)
         {
+            if (!ShouldApplyEvent(pkt.PlayerId, pkt.Tick))
+                return;
+
             if (pkt.PlayerId > (byte)PlayerId.PlayerTwo)
             {
                 ExtraRemoteAvatarManager.ApplyWeaponEvent(pkt);
@@ -30,7 +42,16 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            var player = PlayerManager.GetPlayer((PlayerId)pkt.PlayerId) as LevelPlayerController;
+            LevelPlayerController player;
+            try
+            {
+                player = PlayerManager.GetPlayer((PlayerId)pkt.PlayerId) as LevelPlayerController;
+            }
+            catch
+            {
+                return;
+            }
+
             if (player == null) return;
 
             // Set look direction so the muzzle flash appears in the right direction
@@ -100,6 +121,27 @@ namespace CupheadOnline.Sync
             {
                 Plugin.Log.LogWarning($"[WeaponReplicator] Weapon switch failed: {ex.Message}");
             }
+        }
+
+        static bool ShouldApplyEvent(byte playerId, uint tick)
+        {
+            uint previous;
+            if (_lastEventTicks.TryGetValue(playerId, out previous))
+            {
+                if (NetTick.IsOlder(tick, previous))
+                    return false;
+                if (NetTick.IsNewer(tick, previous))
+                    _lastEventTicks[playerId] = tick;
+                return true;
+            }
+
+            _lastEventTicks[playerId] = tick;
+            return true;
+        }
+
+        static void Reset()
+        {
+            _lastEventTicks.Clear();
         }
     }
 }

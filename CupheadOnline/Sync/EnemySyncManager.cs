@@ -46,7 +46,7 @@ namespace CupheadOnline.Sync
 
         public static void HostTick()
         {
-            if (!MultiplayerSession.IsHost || !Plugin.Net.IsConnected) return;
+            if (!MultiplayerSession.IsHost || Plugin.Net == null || !Plugin.Net.IsConnected) return;
 
             var enemies = Object.FindObjectsOfType<DamageReceiver>();
             int enemyCount = CountEnemies(enemies);

@@ -42,6 +42,7 @@ namespace CupheadOnline.Patches
             Plugin.Net.SendDamageEventForParticipant(
                 (byte)player.id,
                 info.damage,
+                info.stoneTime,
                 (byte)info.damageSource,
                 MultiplayerSession.Tick);
         }

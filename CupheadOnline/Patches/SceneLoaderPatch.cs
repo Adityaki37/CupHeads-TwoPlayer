@@ -15,7 +15,8 @@ namespace CupheadOnline.Patches
         internal static void ResetTransientSyncState()
         {
             EnemySyncManager.Reset();
-            DamageAuthority.Reset();
+            DamageAuthority.ResetAll();
+            ParticipantReviveController.Reset();
             EnemyRegistry.Clear();
             RemotePlayer.Reset();
             RemoteInputDriver.Reset();

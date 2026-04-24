@@ -70,7 +70,11 @@ namespace CupheadOnline.Patches
             if (authoritativeBuiltIn)
                 Plugin.Net.SendPlayerState(ref pkt);
             else
+            {
                 SendInputFrameAndState(__instance, player, ref pkt);
+                if (MultiplayerSession.IsClient && MultiplayerSession.IsLocalPlayer(player.id))
+                    ApplyAuthoritativeCorrection(__instance, player.id);
+            }
         }
 
         internal static byte BuildFlags(AbstractPlayerController player, LevelPlayerMotor m)
@@ -153,6 +157,22 @@ namespace CupheadOnline.Patches
             t.Property("IsUsingSuperOrEx").SetValue(s.IsSuper);
 
             RemotePlayer.UpdateStateTransitions(participantId, motor, s);
+        }
+
+        static void ApplyAuthoritativeCorrection(LevelPlayerMotor motor, PlayerId playerId)
+        {
+            PlayerStatePacket snapshot;
+            if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+                return;
+
+            var target = new Vector3(snapshot.PosX, snapshot.PosY, motor.transform.position.z);
+            float distance = Vector2.Distance(motor.transform.position, target);
+            if (distance < 0.35f)
+                return;
+
+            motor.transform.position = distance > 4f
+                ? target
+                : Vector3.Lerp(motor.transform.position, target, 0.18f);
         }
     }
 

@@ -1277,12 +1277,20 @@ namespace CupheadOnline.Net
         public void SendReviveGrant(ref ReviveGrantPacket p) => Send(PacketType.ReviveGrant, ref p, true);
         public bool SendDamageEventForParticipant(byte participantId, float damage, byte source, uint tick)
         {
-            if (!_steamReady || !_isHost || _state != NetState.Connected || damage <= 0f)
+            return SendDamageEventForParticipant(participantId, damage, 0f, source, tick);
+        }
+
+        public bool SendDamageEventForParticipant(byte participantId, float damage, float stoneTime, byte source, uint tick)
+        {
+            if (!_steamReady || !_isHost || _state != NetState.Connected)
+                return false;
+            if (damage <= 0f && stoneTime <= 0f)
                 return false;
 
             var pkt = new DamageEventPacket
             {
                 Damage = damage,
+                StoneTime = stoneTime,
                 Source = source,
                 Tick = tick,
             };

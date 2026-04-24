@@ -74,6 +74,12 @@ namespace CupheadOnline.Net
                 {
                     var pkt = new SceneChangePacket();
                     pkt.Read(r);
+                    if (!System.Enum.IsDefined(typeof(Levels), pkt.LevelEnum))
+                    {
+                        Plugin.Log.LogWarning("[Dispatcher] Ignored invalid level change " + pkt.LevelEnum + ".");
+                        break;
+                    }
+
                     RngSync.SetSeed(pkt.RngSeed);
                     if (!MultiplayerSession.IsHost)
                     {
@@ -87,6 +93,12 @@ namespace CupheadOnline.Net
                 {
                     var pkt = new MenuSceneChangePacket();
                     pkt.Read(r);
+                    if (!System.Enum.IsDefined(typeof(Scenes), pkt.SceneEnum))
+                    {
+                        Plugin.Log.LogWarning("[Dispatcher] Ignored invalid scene change " + pkt.SceneEnum + ".");
+                        break;
+                    }
+
                     RngSync.SetSeed(pkt.RngSeed);
                     if (!MultiplayerSession.IsHost)
                     {
@@ -164,11 +176,18 @@ namespace CupheadOnline.Net
                     if (MultiplayerSession.IsHost) break;
                     var pkt = new SessionStartPacket();
                     pkt.Read(r);
+                    SessionSync.ApplySessionStart(pkt);
                     RngSync.SetSeed(pkt.RngSeed);
                     if (!MultiplayerSession.IsActive || MultiplayerSession.IsHost)
                         MultiplayerSession.StartAsClient();
                     if (pkt.IsInLevel && pkt.CurrentLevel >= 0)
                     {
+                        if (!System.Enum.IsDefined(typeof(Levels), pkt.CurrentLevel))
+                        {
+                            Plugin.Log.LogWarning("[Dispatcher] Ignored invalid session-start level " + pkt.CurrentLevel + ".");
+                            break;
+                        }
+
                         SceneSyncState.AllowNextClientLevelLoad();
                         SceneLoader.LoadLevel((Levels)pkt.CurrentLevel, SceneLoader.Transition.Iris);
                     }

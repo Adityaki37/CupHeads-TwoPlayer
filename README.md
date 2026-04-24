@@ -16,10 +16,13 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 - Host, join, invite friend, retry last action, and export bug reports
 - Host-led lobby flow with integrated `SAVE SLOT`, `LEAD`, and `START GAME` actions
 - Host-authoritative scene syncing for level and menu transitions
+- Host-authoritative client drift correction so the guest's local player gets gently pulled back to the host's true gameplay position instead of splitting into a separate solo run
 - Automatic host scene-follow so guests are pulled into the selected save/map when the host starts
 - Networked overworld handoff that spawns both native players, remaps guest controls onto Player Two, and syncs map movement before entering a level
 - Universal input routing so the local player can switch between keyboard and controller at any time without restarting the session
+- Safer remote button-edge handling so jump, dash, confirm, cancel, and menu actions fire once per input press instead of repeating across packet gaps
 - Remote menu input routing so guests can drive Player Two interactions in overworld prompts, equip cards, and shop-style internal menus while the host remains authoritative
+- Defensive stale-packet guards for save selection, host snapshots, weapon events, revive grants, damage events, scene loads, and status updates
 - Save compatibility checks with warnings for mismatched progress, DLC state, or setup
 - Live connection HUD with role, status, session info, and sync warnings
 - In-game session panel with `F8` toggle for quick diagnostics and session state

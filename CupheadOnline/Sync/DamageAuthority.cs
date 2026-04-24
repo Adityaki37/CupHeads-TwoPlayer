@@ -1,5 +1,7 @@
 using UnityEngine;
 using CupheadOnline.Net;
+using System.Collections.Generic;
+using System.Reflection;
 
 namespace CupheadOnline.Sync
 {
@@ -19,9 +21,21 @@ namespace CupheadOnline.Sync
         // Tag written onto DamageDealer.DamageInfo to mark authorised damage
         // We compare damage amount + source to avoid spoofing.
         private static float  _pendingDamage;
+        private static float  _pendingStoneTime;
         private static byte   _pendingSource;
         private static PlayerId _pendingTarget = PlayerId.None;
         private static bool   _pendingReady;
+        private static readonly Dictionary<byte, uint> _lastAppliedTicks =
+            new Dictionary<byte, uint>(2);
+        private static readonly FieldInfo _damageInfoStoneTimeField =
+            typeof(DamageDealer.DamageInfo).GetField(
+                "<stoneTime>k__BackingField",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static DamageAuthority()
+        {
+            MultiplayerSession.OnSessionEnded += ResetAll;
+        }
 
         // ──────────────────────────────────────────────────────────────────────
         //  Called by PacketDispatcher on DamageEventPacket received
@@ -29,14 +43,41 @@ namespace CupheadOnline.Sync
 
         public static void ApplyAuthorized(DamageEventPacket pkt)
         {
+            if (Level.Current == null)
+                return;
+
+            uint previousTick;
+            if (_lastAppliedTicks.TryGetValue(pkt.TargetPlayerId, out previousTick)
+             && NetTick.IsOlder(pkt.Tick, previousTick))
+            {
+                return;
+            }
+
             // Find the target player controller and force-apply the damage
-            var player = PlayerManager.GetPlayer((PlayerId)pkt.TargetPlayerId);
+            AbstractPlayerController player;
+            try
+            {
+                player = PlayerManager.GetPlayer((PlayerId)pkt.TargetPlayerId);
+            }
+            catch
+            {
+                return;
+            }
+
             if (player == null) return;
+            if (!(player is LevelPlayerController)) return;
             var dr = player.damageReceiver as PlayerDamageReceiver;
             if (dr == null) return;
 
+            if (!_lastAppliedTicks.ContainsKey(pkt.TargetPlayerId)
+             || NetTick.IsNewer(pkt.Tick, _lastAppliedTicks[pkt.TargetPlayerId]))
+            {
+                _lastAppliedTicks[pkt.TargetPlayerId] = pkt.Tick;
+            }
+
             // Mark as authorised so the prefix patch lets it through
             _pendingDamage = pkt.Damage;
+            _pendingStoneTime = pkt.StoneTime;
             _pendingSource = pkt.Source;
             _pendingTarget = (PlayerId)pkt.TargetPlayerId;
             _pendingReady  = true;
@@ -47,10 +88,16 @@ namespace CupheadOnline.Sync
                 DamageDealer.Direction.Neutral,
                 Vector2.zero,
                 (DamageDealer.DamageSource)pkt.Source);
-            dr.TakeDamage(info);
+            SetStoneTime(info, pkt.StoneTime);
 
-            _pendingReady = false;
-            _pendingTarget = PlayerId.None;
+            try
+            {
+                dr.TakeDamage(info);
+            }
+            finally
+            {
+                Reset();
+            }
         }
 
         /// <summary>
@@ -66,15 +113,37 @@ namespace CupheadOnline.Sync
                 return false;
 
             return System.Math.Abs(info.damage - _pendingDamage) < 0.001f
+                && System.Math.Abs(info.stoneTime - _pendingStoneTime) < 0.001f
                 && info.damageSource == (DamageDealer.DamageSource)_pendingSource;
         }
 
         public static void Reset()
         {
             _pendingDamage = 0f;
+            _pendingStoneTime = 0f;
             _pendingSource = 0;
             _pendingTarget = PlayerId.None;
             _pendingReady = false;
+        }
+
+        public static void ResetAll()
+        {
+            Reset();
+            _lastAppliedTicks.Clear();
+        }
+
+        private static void SetStoneTime(DamageDealer.DamageInfo info, float stoneTime)
+        {
+            if (_damageInfoStoneTimeField == null)
+                return;
+
+            try
+            {
+                _damageInfoStoneTimeField.SetValue(info, stoneTime);
+            }
+            catch
+            {
+            }
         }
     }
 }

@@ -141,7 +141,16 @@ namespace CupheadOnline.Sync
 
         static void ApplyToLivePlayer(PlayerId id, LobbySyncPacket pkt)
         {
-            var player = PlayerManager.GetPlayer(id);
+            AbstractPlayerController player;
+            try
+            {
+                player = PlayerManager.GetPlayer(id);
+            }
+            catch
+            {
+                return;
+            }
+
             if (player == null || player.stats == null)
                 return;
 

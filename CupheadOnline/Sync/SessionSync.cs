@@ -177,6 +177,9 @@ namespace CupheadOnline.Sync
 
         public static void ApplyRemoteSaveSelection(ref SaveSlotSyncPacket pkt)
         {
+            if (IsStaleSaveRevision(pkt.SaveRevision))
+                return;
+
             bool selectionChanged =
                 !_hasTrackedSave
              || _trackedSaveSlot != pkt.SlotIndex
@@ -214,9 +217,12 @@ namespace CupheadOnline.Sync
 
         public static void ApplyHostSnapshot(SessionSnapshotPacket pkt)
         {
+            if (IsStaleHostSnapshot(pkt))
+                return;
+
             _lastHostSnapshot = pkt;
             _lastHostSnapshotAt = Time.unscaledTime;
-            if (pkt.SaveRevision != 0)
+            if (pkt.SaveRevision != 0 && !IsStaleSaveRevision(pkt.SaveRevision))
                 _saveRevision = pkt.SaveRevision;
 
             if (pkt.HasTrackedSave && pkt.SaveSlotIndex != byte.MaxValue)
@@ -230,6 +236,21 @@ namespace CupheadOnline.Sync
 
             TryAutoFollowHostSnapshot(pkt);
             EvaluateDesync();
+        }
+
+        public static void ApplySessionStart(SessionStartPacket pkt)
+        {
+            _hasCompletedHandshake = true;
+            if (pkt.SaveRevision != 0 && !IsStaleSaveRevision(pkt.SaveRevision))
+                _saveRevision = pkt.SaveRevision;
+        }
+
+        public static bool IsStaleSaveRevision(ushort revision)
+        {
+            if (revision == 0 || _saveRevision == 0 || revision == _saveRevision)
+                return false;
+
+            return unchecked((short)(revision - _saveRevision)) < 0;
         }
 
         public static void ApplySessionSignal(SessionSignalPacket pkt)
@@ -1019,6 +1040,18 @@ namespace CupheadOnline.Sync
         private static SessionIssueSeverity MaxSeverity(SessionIssueSeverity left, SessionIssueSeverity right)
         {
             return left >= right ? left : right;
+        }
+
+        private static bool IsStaleHostSnapshot(SessionSnapshotPacket pkt)
+        {
+            if (!_lastHostSnapshot.HasValue)
+                return false;
+
+            var previous = _lastHostSnapshot.Value;
+            if (pkt.HostTick == 0 || previous.HostTick == 0)
+                return false;
+
+            return NetTick.IsOlder(pkt.HostTick, previous.HostTick);
         }
 
         private static void HandleSessionStarted()

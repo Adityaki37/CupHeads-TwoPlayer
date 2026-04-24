@@ -22,6 +22,18 @@ namespace CupheadOnline.Sync
 
         static readonly List<PlayerDeathEffect> ScratchDeathEffects =
             new List<PlayerDeathEffect>(4);
+        static readonly HashSet<long> AppliedGrantKeys =
+            new HashSet<long>();
+
+        static ParticipantReviveController()
+        {
+            MultiplayerSession.OnSessionEnded += Reset;
+        }
+
+        public static void Reset()
+        {
+            AppliedGrantKeys.Clear();
+        }
 
         public static bool TryOverrideReviveOutOfFrame(PlayerDeathEffect effect)
         {
@@ -124,6 +136,8 @@ namespace CupheadOnline.Sync
         {
             if (!MultiplayerSession.IsActive)
                 return;
+            if (!MarkGrantApplied(pkt))
+                return;
 
             PlayerId localPlayerId = MultiplayerSession.LocalId;
             if (pkt.ApplyDonorCost)
@@ -162,7 +176,7 @@ namespace CupheadOnline.Sync
 
         static void ApplyLocalDonorCost(PlayerId localPlayerId)
         {
-            var player = PlayerManager.GetPlayer(localPlayerId);
+            var player = GetPlayerSafe(localPlayerId);
             if (player == null || player.stats == null || !player.stats.PartnerCanSteal)
                 return;
 
@@ -172,7 +186,7 @@ namespace CupheadOnline.Sync
 
         static void ApplyLocalRevive(PlayerId localPlayerId, Vector2 revivePosition)
         {
-            var player = PlayerManager.GetPlayer(localPlayerId);
+            var player = GetPlayerSafe(localPlayerId);
             if (player == null)
                 return;
 
@@ -193,6 +207,30 @@ namespace CupheadOnline.Sync
                 Object.Destroy(deathEffect.gameObject);
 
             ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static bool MarkGrantApplied(ReviveGrantPacket pkt)
+        {
+            if (AppliedGrantKeys.Count > 128)
+                AppliedGrantKeys.Clear();
+
+            long key = ((long)pkt.Tick << 24)
+                     ^ ((long)pkt.TargetParticipantId << 16)
+                     ^ ((long)pkt.DonorParticipantId << 8)
+                     ^ pkt.Flags;
+            return AppliedGrantKeys.Add(key);
+        }
+
+        static AbstractPlayerController GetPlayerSafe(PlayerId playerId)
+        {
+            try
+            {
+                return PlayerManager.GetPlayer(playerId);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         static PlayerDeathEffect FindLocalDeathEffect(PlayerId localPlayerId)

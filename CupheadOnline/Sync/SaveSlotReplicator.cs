@@ -7,6 +7,18 @@ namespace CupheadOnline.Sync
     {
         public static void Apply(SaveSlotSyncPacket pkt)
         {
+            if (SessionSync.IsStaleSaveRevision(pkt.SaveRevision))
+            {
+                Plugin.Log.LogInfo("[SaveSync] Ignored stale save slot revision " + pkt.SaveRevision + ".");
+                return;
+            }
+
+            if (!System.Enum.IsDefined(typeof(Scenes), pkt.CurrentMapScene))
+            {
+                Plugin.Log.LogWarning("[SaveSync] Ignored save slot with invalid map scene " + pkt.CurrentMapScene + ".");
+                return;
+            }
+
             int slot = Mathf.Clamp(pkt.SlotIndex, 0, 2);
             var mapScene = (Scenes)pkt.CurrentMapScene;
 
