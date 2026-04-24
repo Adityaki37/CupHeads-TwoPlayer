@@ -38,6 +38,8 @@ namespace CupheadOnline.UI
         private float _previousTimeScale = 1f;
         private bool _previousAudioListenerPause;
         private bool _prepared;
+        private bool _playbackStarting;
+        private bool _playbackStarted;
         private bool _closing;
         private bool _gateApplied;
 
@@ -120,6 +122,20 @@ namespace CupheadOnline.UI
             // Let Unity finish the boot frame, but keep Cuphead paused behind the splash.
             yield return null;
             yield return null;
+
+            if (_closing || string.IsNullOrEmpty(_videoPath))
+                yield break;
+
+            bool loggedFocusWait = false;
+            while (!_closing && !Application.isFocused)
+            {
+                if (!loggedFocusWait)
+                {
+                    loggedFocusWait = true;
+                    Plugin.Log.LogInfo("[StartupSplash] Waiting for Cuphead window focus before playback.");
+                }
+                yield return null;
+            }
 
             if (_closing || string.IsNullOrEmpty(_videoPath))
                 yield break;
@@ -282,8 +298,11 @@ namespace CupheadOnline.UI
         {
             if (_closing || source == null)
                 return;
+            if (_playbackStarting || _playbackStarted)
+                return;
 
             _prepared = true;
+            _playbackStarting = true;
             StartCoroutine(PlayFromBeginning(source));
         }
 
@@ -294,7 +313,6 @@ namespace CupheadOnline.UI
 
             try
             {
-                source.Stop();
                 source.time = 0.0;
                 source.frame = 0;
             }
@@ -314,11 +332,14 @@ namespace CupheadOnline.UI
             {
                 if (_videoImage != null)
                     _videoImage.color = Color.white;
+                _playbackStarted = true;
+                _playbackStarting = false;
                 source.Play();
                 Plugin.Log.LogInfo("[StartupSplash] Playing startup splash from frame 0 with audio.");
             }
             catch (Exception ex)
             {
+                _playbackStarting = false;
                 Plugin.Log.LogWarning("[StartupSplash] Video play failed: " + ex.Message);
                 BeginClose(true);
             }

@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.19 - 2026-04-24
+
+- Fixed a Unity 2017 `VideoPlayer` prepare loop caused by calling `Stop()` inside `prepareCompleted`.
+- Added a one-shot playback guard so the startup splash can only start once per boot.
+- The splash now waits for the Cuphead window to be focused before preparing and playing, so the intro does not burn its opening seconds while the game is in the background.
+- Keeps the black boot gate visible while waiting for focus, then starts the intro from frame zero.
+
 ## v1.2.18 - 2026-04-24
 
 - Fixed the startup splash appearing to begin partway through by hiding the video surface until playback starts.
