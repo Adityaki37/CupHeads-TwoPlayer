@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.18 - 2026-04-24
+
+- Fixed the startup splash appearing to begin partway through by hiding the video surface until playback starts.
+- Rewinds the prepared `VideoPlayer` back to `time = 0` / `frame = 0`, waits one frame, then starts playback from the beginning.
+- Keeps the black boot gate visible while the video is preparing so the first visible splash frame is no longer lost behind Unity startup timing.
+
 ## v1.2.17 - 2026-04-24
 
 - Changed startup splash playback into a true boot gate: Cuphead is paused and background game audio is muted while the intro video plays.

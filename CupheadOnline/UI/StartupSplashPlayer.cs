@@ -164,7 +164,7 @@ namespace CupheadOnline.UI
             var videoRect = video.AddComponent<RectTransform>();
             Stretch(videoRect);
             _videoImage = video.AddComponent<RawImage>();
-            _videoImage.color = Color.white;
+            _videoImage.color = new Color(1f, 1f, 1f, 0f);
 
             var fitter = video.AddComponent<AspectRatioFitter>();
             fitter.aspectMode = AspectRatioFitter.AspectMode.EnvelopeParent;
@@ -284,11 +284,38 @@ namespace CupheadOnline.UI
                 return;
 
             _prepared = true;
+            StartCoroutine(PlayFromBeginning(source));
+        }
+
+        private System.Collections.IEnumerator PlayFromBeginning(VideoPlayer source)
+        {
+            if (_closing || source == null)
+                yield break;
 
             try
             {
+                source.Stop();
+                source.time = 0.0;
+                source.frame = 0;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[StartupSplash] Video rewind failed: " + ex.Message);
+                BeginClose(true);
+                yield break;
+            }
+
+            yield return null;
+
+            if (_closing || source == null)
+                yield break;
+
+            try
+            {
+                if (_videoImage != null)
+                    _videoImage.color = Color.white;
                 source.Play();
-                Plugin.Log.LogInfo("[StartupSplash] Playing startup splash with audio.");
+                Plugin.Log.LogInfo("[StartupSplash] Playing startup splash from frame 0 with audio.");
             }
             catch (Exception ex)
             {
