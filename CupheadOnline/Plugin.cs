@@ -30,6 +30,7 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgAutoOpenSteamFriends;
         static ConfigEntry<bool> _cfgShowCreditsMenu;
         static ConfigEntry<bool> _cfgShowPauseSessionPanel;
+        static ConfigEntry<bool> _cfgShowBossHealthBars;
         static ConfigEntry<bool> _cfgBossHpScalingEnabled;
         static ConfigEntry<float> _cfgBossHpPerExtraPlayer;
         static ConfigEntry<int> _cfgPreferredPlayerColor;
@@ -39,6 +40,7 @@ namespace CupheadOnline
         public static bool AutoOpenSteamFriends => _cfgAutoOpenSteamFriends != null && _cfgAutoOpenSteamFriends.Value;
         public static bool ShowCreditsMenu => _cfgShowCreditsMenu == null || _cfgShowCreditsMenu.Value;
         public static bool ShowPauseSessionPanel => _cfgShowPauseSessionPanel == null || _cfgShowPauseSessionPanel.Value;
+        public static bool ShowBossHealthBars => _cfgShowBossHealthBars == null || _cfgShowBossHealthBars.Value;
         public static bool BossHpScalingEnabled => _cfgBossHpScalingEnabled != null && _cfgBossHpScalingEnabled.Value;
         public static float BossHpPerExtraPlayer =>
             _cfgBossHpPerExtraPlayer == null ? 0.35f : Mathf.Max(0f, _cfgBossHpPerExtraPlayer.Value);
@@ -65,6 +67,8 @@ namespace CupheadOnline
                 "Show the custom Credits entry on the title screen.");
             _cfgShowPauseSessionPanel = Config.Bind("UI", "ShowPauseSessionPanel", true,
                 "Show the in-game session panel while paused, or when F8 is toggled.");
+            _cfgShowBossHealthBars = Config.Bind("UI", "ShowBossHealthBars", true,
+                "Show CupHeads boss health bars during battle levels.");
             _cfgBossHpScalingEnabled = Config.Bind("Balance", "EnableBossHpScalingByPlayerCount", false,
                 "Scale battle-level boss HP by connected player count. Disabled by default.");
             _cfgBossHpPerExtraPlayer = Config.Bind("Balance", "BossHpPerExtraPlayer", 0.35f,
@@ -268,6 +272,7 @@ namespace CupheadOnline
             ExtraParticipantReviveVisuals.Update();
             PlayerColorSync.Update();
             BossHealthScaler.Update();
+            BossHealthBarOverlay.Tick();
             SessionSync.Update();
             SessionPausePanel.Ensure();
         }
@@ -284,6 +289,7 @@ namespace CupheadOnline
             MultiplayerSession.End();
             PlayerColorSync.Reset();
             BossHealthScaler.Reset();
+            BossHealthBarOverlay.Hide();
         }
 
         public static void SetPreferredPlayerColorSelection(int selection)
@@ -310,6 +316,7 @@ namespace CupheadOnline
                           + "Auto Open Steam Friends: " + AutoOpenSteamFriends + nl
                           + "Show Credits Menu: " + ShowCreditsMenu + nl
                           + "Show Pause Session Panel: " + ShowPauseSessionPanel + nl
+                          + "Show Boss Health Bars: " + ShowBossHealthBars + nl
                           + "Boss HP Scaling Enabled: " + BossHpScalingEnabled + nl
                           + "Boss HP Per Extra Player: " + BossHpPerExtraPlayer.ToString("0.00") + nl
                           + BossHealthScaler.GetStatusSummary() + nl;
@@ -327,6 +334,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.12";
+        public const string VERSION = "1.2.13";
     }
 }

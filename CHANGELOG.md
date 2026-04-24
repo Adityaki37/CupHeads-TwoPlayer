@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.2.13 - 2026-04-24
+
+- Added optional in-battle boss health bars that read Cuphead's live boss health property objects where available, with a DamageReceiver fallback for boss-like enemies.
+- Added animated front/lag health fills, short defeated hold timing, and multi-boss stacking for fights with several major targets.
+- Added a `ShowBossHealthBars` BepInEx UI config toggle and included the setting in diagnostics.
+- Reset boss-bar tracking on scene transitions so stale defeated or fallback max-health values do not bleed between fights.
+
 ## v1.2.12 - 2026-04-24
 
 - Fixed remote button-edge handling so `GetButtonDown` and `GetButtonUp` behave like real per-frame inputs instead of repeating until another network packet arrives.
