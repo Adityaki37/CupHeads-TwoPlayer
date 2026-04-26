@@ -204,7 +204,7 @@ Write-Step "Restoring NuGet packages"
 Invoke-Checked { dotnet restore $ModProject --nologo } "NuGet restore failed."
 
 Write-Step "Building mod DLL ($Configuration)"
-Invoke-Checked { dotnet build $ModProject -c $Configuration --nologo --no-restore } "Mod build failed."
+Invoke-Checked { dotnet build $ModProject -c $Configuration --nologo --no-restore -p:DeployPluginToGame=false } "Mod build failed."
 
 $ModOutput = Join-Path $Root "CupheadOnline\bin\$Configuration\net35"
 $ModDll    = Join-Path $ModOutput "CupheadOnline.dll"
@@ -277,6 +277,6 @@ Write-Host "  +==============================================+" -ForegroundColor
 Write-Host "  | Build complete                               |" -ForegroundColor Green
 Write-Host "  |                                              |" -ForegroundColor Green
 Write-Host "  | dist\\CupheadOnline.dll  <- mod              |" -ForegroundColor Green
-Write-Host "  | dist\\CupHeads.exe      <- web installer    |" -ForegroundColor Green
+Write-Host "  | dist\\CupHeads.exe      <- portable installer |" -ForegroundColor Green
 Write-Host "  +==============================================+" -ForegroundColor Green
 Write-Host ""

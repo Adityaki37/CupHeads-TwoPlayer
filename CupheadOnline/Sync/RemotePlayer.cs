@@ -61,6 +61,9 @@ namespace CupheadOnline.Sync
         {
             if (pkt.PlayerId > (byte)PlayerId.PlayerTwo)
             {
+                if (Plugin.VanillaTwoPlayerOnline)
+                    return;
+
                 var extraState = GetOrCreateState(pkt.PlayerId);
                 if (extraState.HasReceivedTick && !NetTick.IsNewer(pkt.Tick, extraState.LastReceivedTick))
                     return;
@@ -112,19 +115,36 @@ namespace CupheadOnline.Sync
 
         public static PlayerStatePacket? GetNextSnapshot(byte participantId)
         {
+            return GetNextSnapshot(participantId, mapState: false);
+        }
+
+        public static PlayerStatePacket? GetNextSnapshot(PlayerId playerId, bool mapState)
+        {
+            return GetNextSnapshot((byte)playerId, mapState);
+        }
+
+        public static PlayerStatePacket? GetNextSnapshot(byte participantId, bool mapState)
+        {
             var state = GetOrCreateState(participantId);
 
             while (state.Buffer.Count > TargetBuffer + 2 && state.Buffer.Count > 1)
                 state.Last = state.Buffer.Dequeue();
 
-            if (state.Buffer.Count > 0)
+            int attempts = state.Buffer.Count;
+            while (attempts-- > 0 && state.Buffer.Count > 0)
             {
-                state.Last = state.Buffer.Dequeue();
+                var candidate = state.Buffer.Dequeue();
+                if (candidate.IsMapState != mapState)
+                    continue;
+
+                state.Last = candidate;
                 state.HasLast = true;
-                return state.Last;
+                return candidate;
             }
 
-            return state.HasLast ? (PlayerStatePacket?)state.Last : null;
+            return state.HasLast && state.Last.IsMapState == mapState
+                ? (PlayerStatePacket?)state.Last
+                : null;
         }
 
         public static bool TryGetLocalAuthoritySnapshot(PlayerId playerId, out PlayerStatePacket snapshot)

@@ -104,6 +104,14 @@ namespace CupheadOnline.Patches
             if (!authoritativeBuiltIn && !MultiplayerSession.IsLocalPlayer(player.id))
                 return;
 
+            if (Plugin.VanillaTwoPlayerOnline
+             && MultiplayerSession.IsClient
+             && MultiplayerSession.IsLocalPlayer(player.id))
+            {
+                ApplyAuthoritativeMapCorrection(__instance, player.id);
+                return;
+            }
+
             var packet = BuildMapStatePacket(player, __instance);
             Plugin.Net.SendPlayerState(ref packet);
         }
@@ -139,7 +147,7 @@ namespace CupheadOnline.Patches
                 PosY = motor.transform.position.y,
                 LookX = (sbyte)x,
                 LookY = (sbyte)y,
-                Flags = 0,
+                Flags = PlayerStatePacket.MapStateFlag,
                 AnimState = (byte)player.state,
                 Tick = MultiplayerSession.Tick,
             };
@@ -147,7 +155,7 @@ namespace CupheadOnline.Patches
 
         static void ApplyRemoteMapState(MapPlayerMotor motor, byte participantId)
         {
-            var snapshot = RemotePlayer.GetNextSnapshot(participantId);
+            var snapshot = RemotePlayer.GetNextSnapshot(participantId, mapState: true);
             if (!snapshot.HasValue)
             {
                 StopPhysics(motor);
@@ -170,6 +178,24 @@ namespace CupheadOnline.Patches
                 body.velocity = Vector2.zero;
         }
 
+        static void ApplyAuthoritativeMapCorrection(MapPlayerMotor motor, PlayerId playerId)
+        {
+            PlayerStatePacket snapshot;
+            if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+                return;
+            if (!snapshot.IsMapState)
+                return;
+
+            var target = new Vector3(snapshot.PosX, snapshot.PosY, motor.transform.position.z);
+            float distance = Vector2.Distance(motor.transform.position, target);
+            if (distance < 0.35f)
+                return;
+
+            motor.transform.position = distance > 4f
+                ? target
+                : Vector3.Lerp(motor.transform.position, target, 0.12f);
+        }
+
         static int AxisFromVelocity(float value)
         {
             if (value > 0.05f) return 1;
@@ -188,6 +214,8 @@ namespace CupheadOnline.Patches
 
             var player = __instance.player;
             if (player == null || !MultiplayerSession.IsNetworkControlledPlayer(player.id))
+                return true;
+            if (MultiplayerSession.IsHost && player.id <= PlayerId.PlayerTwo)
                 return true;
 
             sbyte x;

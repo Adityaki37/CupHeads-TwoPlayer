@@ -71,7 +71,9 @@ namespace CupheadOnline.Patches
                 Plugin.Net.SendPlayerState(ref pkt);
             else
             {
-                SendInputFrameAndState(__instance, player, ref pkt);
+                if (!Plugin.VanillaTwoPlayerOnline)
+                    SendInputFrameAndState(__instance, player, ref pkt);
+
                 if (MultiplayerSession.IsClient && MultiplayerSession.IsLocalPlayer(player.id))
                     ApplyAuthoritativeCorrection(__instance, player.id);
             }
@@ -121,7 +123,7 @@ namespace CupheadOnline.Patches
 
         static void ApplyRemoteState(LevelPlayerMotor motor, byte participantId)
         {
-            var snapshot = RemotePlayer.GetNextSnapshot(participantId);
+            var snapshot = RemotePlayer.GetNextSnapshot(participantId, mapState: false);
             if (!snapshot.HasValue)
                 return;
 
@@ -164,6 +166,8 @@ namespace CupheadOnline.Patches
             PlayerStatePacket snapshot;
             if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
                 return;
+            if (snapshot.IsMapState)
+                return;
 
             var target = new Vector3(snapshot.PosX, snapshot.PosY, motor.transform.position.z);
             float distance = Vector2.Distance(motor.transform.position, target);
@@ -185,6 +189,13 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerInput __instance, PlayerInput.Axis axis, ref float __result)
         {
+            float scripted;
+            if (LocalDevE2ETest.TryGetLocalAxis(__instance.playerId, axis == PlayerInput.Axis.X ? 0 : 1, out scripted))
+            {
+                __result = scripted;
+                return false;
+            }
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId))
@@ -207,6 +218,13 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerInput __instance, PlayerInput.Axis axis, ref int __result)
         {
+            float scripted;
+            if (LocalDevE2ETest.TryGetLocalAxis(__instance.playerId, axis == PlayerInput.Axis.X ? 0 : 1, out scripted))
+            {
+                __result = scripted > 0.38f ? 1 : scripted < -0.38f ? -1 : 0;
+                return false;
+            }
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId))
@@ -230,6 +248,13 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerInput __instance, CupheadButton button, ref bool __result)
         {
+            bool scripted;
+            if (LocalDevE2ETest.TryGetLocalButton(__instance.playerId, (int)button, false, false, out scripted))
+            {
+                __result = scripted;
+                return false;
+            }
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId))
@@ -252,6 +277,13 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerInput __instance, CupheadButton button, ref bool __result)
         {
+            bool scripted;
+            if (LocalDevE2ETest.TryGetLocalButton(__instance.playerId, (int)button, true, false, out scripted))
+            {
+                __result = scripted;
+                return false;
+            }
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId))
@@ -267,6 +299,13 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerInput __instance, CupheadButton button, ref bool __result)
         {
+            bool scripted;
+            if (LocalDevE2ETest.TryGetLocalButton(__instance.playerId, (int)button, false, true, out scripted))
+            {
+                __result = scripted;
+                return false;
+            }
+
             if (!MultiplayerSession.IsActive)
                 return true;
             if (!MultiplayerSession.IsNetworkControlledPlayer(__instance.playerId))

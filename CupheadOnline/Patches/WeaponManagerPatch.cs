@@ -34,6 +34,10 @@ namespace CupheadOnline.Patches
         {
             if (!MultiplayerSession.IsActive) return;
             if (Plugin.Net == null || !Plugin.Net.IsConnected) return;
+            if (Plugin.VanillaTwoPlayerOnline
+             && MultiplayerSession.IsClient
+             && MultiplayerSession.IsLocalPlayer(player.id)) return;
+
             var motor = player.motor;
             var pkt = new WeaponEventPacket
             {
@@ -51,6 +55,10 @@ namespace CupheadOnline.Patches
         {
             if (!MultiplayerSession.IsActive) return;
             if (Plugin.Net == null || !Plugin.Net.IsConnected) return;
+            if (Plugin.VanillaTwoPlayerOnline
+             && MultiplayerSession.IsClient
+             && MultiplayerSession.IsLocalPlayer(player.id)) return;
+
             var motor = player.motor;
             var pkt = new WeaponEventPacket
             {
@@ -77,6 +85,7 @@ namespace CupheadOnline.Patches
             if (Plugin.Net == null || !Plugin.Net.IsConnected) return;
             var player = __instance.player;
             if (player == null || !MultiplayerSession.IsLocalPlayer(player.id)) return;
+            if (Plugin.VanillaTwoPlayerOnline && MultiplayerSession.IsClient) return;
 
             var motor = player.motor;
             var pkt = new WeaponEventPacket

@@ -44,6 +44,8 @@ namespace CupheadOnline.Net
 
     public struct PlayerStatePacket : IPacket
     {
+        public const byte MapStateFlag = 128;
+
         public byte PlayerId;
         public float PosX;
         public float PosY;
@@ -60,6 +62,7 @@ namespace CupheadOnline.Net
         public bool IsHit => (Flags & 16) != 0;
         public bool IsSuper => (Flags & 32) != 0;
         public bool IsDead => (Flags & 64) != 0;
+        public bool IsMapState => (Flags & MapStateFlag) != 0;
 
         public void Write(BinaryWriter w)
         {

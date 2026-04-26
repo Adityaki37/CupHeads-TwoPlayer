@@ -299,6 +299,12 @@ namespace CupheadOnline.Patches
                 return;
 
             float value;
+            if (LocalDevE2ETest.TryGetLocalAxis(owner, actionId, out value))
+            {
+                __result = value;
+                return;
+            }
+
             if (MultiplayerSession.IsNetworkControlledPlayer(owner))
             {
                 if (UniversalInputRouter.TryGetRemoteAxis(owner, actionId, out value))
@@ -339,6 +345,12 @@ namespace CupheadOnline.Patches
                 return;
 
             bool value;
+            if (LocalDevE2ETest.TryGetLocalButton(owner, actionId, down, up, out value))
+            {
+                result = value;
+                return;
+            }
+
             if (MultiplayerSession.IsNetworkControlledPlayer(owner))
             {
                 if (UniversalInputRouter.TryGetRemoteButton(owner, actionId, down, up, out value))

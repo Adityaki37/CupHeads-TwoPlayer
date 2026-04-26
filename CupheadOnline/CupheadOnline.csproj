@@ -109,7 +109,7 @@
   </ItemGroup>
 
   <!-- Post-build: copy output DLL into BepInEx plugin folder -->
-  <Target Name="DeployPlugin" AfterTargets="Build">
+  <Target Name="DeployPlugin" AfterTargets="Build" Condition="'$(DeployPluginToGame)' != 'false'">
     <PropertyGroup>
       <PluginDir>$(BepInExDir)\plugins\CupheadOnline</PluginDir>
     </PropertyGroup>

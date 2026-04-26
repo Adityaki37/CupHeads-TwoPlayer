@@ -40,7 +40,8 @@ namespace CupheadOnline
                 int count = 0;
                 if (HasPlayerSafe(PlayerId.PlayerOne)) count++;
                 if (HasPlayerSafe(PlayerId.PlayerTwo)) count++;
-                count += Sync.ExtraParticipantTracker.LiveCount;
+                if (!Plugin.VanillaTwoPlayerOnline)
+                    count += Sync.ExtraParticipantTracker.LiveCount;
 
                 if (count > 0)
                     return count;

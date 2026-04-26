@@ -22,6 +22,14 @@ namespace CupheadOnline.Patches
             if (levelPlayer == null || levelPlayer.motor == null)
                 return;
 
+            if (Plugin.VanillaTwoPlayerOnline
+             && MultiplayerSession.IsClient
+             && MultiplayerSession.IsLocalPlayer(player.id))
+            {
+                ParticipantStatusTracker.PushLocalStatus(player);
+                return;
+            }
+
             var pkt = PlayerMotorPatch.BuildStatePacket(levelPlayer, levelPlayer.motor);
             Plugin.Net.SendPlayerState(ref pkt);
             ParticipantStatusTracker.PushLocalStatus(player);

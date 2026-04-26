@@ -32,6 +32,9 @@ namespace CupheadOnline.Sync
 
             if (pkt.PlayerId > (byte)PlayerId.PlayerTwo)
             {
+                if (Plugin.VanillaTwoPlayerOnline)
+                    return;
+
                 ExtraRemoteAvatarManager.ApplyWeaponEvent(pkt);
                 return;
             }

@@ -35,6 +35,7 @@ namespace CupheadOnline.Net
         public bool IsSteamReady => _steamReady;
         public bool IsConnected  => _state == NetState.Connected;
         public bool IsHost       => _isHost;
+        public bool IsLocalLoopbackTestActive => _localLoopbackTestActive;
         public int  Latency      { get; private set; }
         public string SteamUnavailableStatus => _steamUnavailableStatus;
         public string LastStatusMessage => _lastStatusMessage;
@@ -455,6 +456,8 @@ namespace CupheadOnline.Net
         string   _steamUnavailableStatus = "Steam is unavailable.\nLaunch Cuphead through Steam.";
         string   _lastStatusMessage;
         string   _lastFailureReason;
+        bool     _localLoopbackTestActive;
+        CSteamID _localLoopbackPeerId = new CSteamID(76561198000000001UL);
         readonly Dictionary<ulong, HostPeerInfo> _hostPeers = new Dictionary<ulong, HostPeerInfo>();
         readonly Dictionary<ulong, byte> _peerSessionParticipantIds = new Dictionary<ulong, byte>();
         byte _nextSessionParticipantId = 2;
@@ -731,12 +734,87 @@ namespace CupheadOnline.Net
 
         // ── Disconnect / failure ──────────────────────────────────────────────
 
+        public bool StartLocalLoopbackTestPeer(out string status)
+        {
+            status = string.Empty;
+
+            if (_state != NetState.Idle && _state != NetState.Error && !_localLoopbackTestActive)
+            {
+                status = "Cannot start local loopback while SteamNetManager is " + _state + ".";
+                return false;
+            }
+
+            _localLoopbackTestActive = true;
+            _isHost = true;
+            _peerId = _localLoopbackPeerId;
+            _lobbyId = CSteamID.Nil;
+            _lastRetryIntent = RetryIntent.None;
+            _lastRetryLobbyId = CSteamID.Nil;
+            _lastReceive = DateTime.UtcNow;
+            _pingSentPending = false;
+            _hostPeers.Clear();
+            _peerSessionParticipantIds.Clear();
+            _nextSessionParticipantId = 2;
+
+            if (!MultiplayerSession.IsActive || !MultiplayerSession.IsHost)
+                MultiplayerSession.StartAsHost();
+            MultiplayerSession.EnsureCupheadMultiplayerState();
+            RemoteInputDriver.Reset(PlayerId.PlayerTwo);
+            RemotePlayer.Reset(PlayerId.PlayerTwo);
+            UpdateHostPeerStage(_localLoopbackPeerId, HostPeerStage.Connected);
+
+            SetState(
+                NetState.Connected,
+                "Local loopback guest connected.\nPlayer Two input is entering through SteamNetManager packet dispatch.");
+            SessionSync.OnConnected(true);
+
+            status = "Local loopback guest connected through SteamNetManager packet injection.";
+            Plugin.Log.LogInfo("[SteamNet] Local loopback peer connected: " + _localLoopbackPeerId.m_SteamID);
+            return true;
+        }
+
+        public void StopLocalLoopbackTestPeer()
+        {
+            if (!_localLoopbackTestActive)
+                return;
+
+            _localLoopbackTestActive = false;
+            if (_peerId == _localLoopbackPeerId)
+                _peerId = CSteamID.Nil;
+            _hostPeers.Remove(_localLoopbackPeerId.m_SteamID);
+            _peerSessionParticipantIds.Remove(_localLoopbackPeerId.m_SteamID);
+            if (_state == NetState.Connected && _lobbyId == CSteamID.Nil)
+                SetState(NetState.Idle, "Local loopback guest disconnected.");
+        }
+
+        public bool InjectLocalLoopbackPacket<T>(PacketType type, ref T pkt) where T : struct, IPacket
+        {
+            if (!_localLoopbackTestActive || !_isHost || _state != NetState.Connected)
+                return false;
+
+            using (var ms = new MemoryStream(256))
+            using (var w = new BinaryWriter(ms))
+            {
+                w.Write((byte)type);
+                pkt.Write(w);
+                w.Flush();
+                byte[] data = ms.ToArray();
+                ProcessPacket(data, data.Length, _localLoopbackPeerId);
+            }
+            return true;
+        }
+
         // Thread-safe wrapper
         void OnP2PConnectFailRaw(P2PSessionConnectFail_t cb)
         {
             var err = cb.m_eP2PSessionError;
             MainThreadQueue.Enqueue(() =>
             {
+                if (_localLoopbackTestActive)
+                {
+                    Plugin.LogVerbose("[SteamNet] Ignoring Steam P2P failure while local loopback is active: " + err);
+                    return;
+                }
                 Plugin.Log.LogWarning("[SteamNet] P2P fail, error=" + err);
                 HandleDisconnect(DescribeP2PFailure(err));
             });
@@ -837,6 +915,9 @@ namespace CupheadOnline.Net
 
         public void Poll()
         {
+            if (_localLoopbackTestActive)
+                return;
+
             if (!_steamReady) return;
 
             try
@@ -1074,6 +1155,9 @@ namespace CupheadOnline.Net
             var incoming = new PlayerStatePacket();
             incoming.Read(reader);
 
+            if (Plugin.VanillaTwoPlayerOnline)
+                return;
+
             byte sessionParticipantId = GetOrAssignSessionParticipantId(sender);
             if (sessionParticipantId == INVALID_PARTICIPANT_ID)
                 return;
@@ -1096,6 +1180,9 @@ namespace CupheadOnline.Net
         {
             var incoming = new WeaponEventPacket();
             incoming.Read(reader);
+
+            if (Plugin.VanillaTwoPlayerOnline && sender == _peerId)
+                return;
 
             byte sessionParticipantId = sender == _peerId
                 ? (byte)PlayerId.PlayerTwo
@@ -1217,6 +1304,9 @@ namespace CupheadOnline.Net
             if (_isHost)
             {
                 if (!IsConnectedHostPeer(sender))
+                    return;
+
+                if (Plugin.VanillaTwoPlayerOnline && sender != _peerId)
                     return;
 
                 if (type == (byte)PacketType.PlayerState)
@@ -1380,6 +1470,8 @@ namespace CupheadOnline.Net
 
         void RawSendTo(CSteamID target, byte[] data, bool reliable)
         {
+            if (_localLoopbackTestActive && target == _localLoopbackPeerId)
+                return;
             if (!_steamReady) return;
             if (target == CSteamID.Nil) return;
             var mode = reliable ? EP2PSend.k_EP2PSendReliable : EP2PSend.k_EP2PSendUnreliable;
@@ -1417,6 +1509,7 @@ namespace CupheadOnline.Net
             _lobbyId         = CSteamID.Nil;
             _pingSentPending = false;
             _isHost          = false;
+            _localLoopbackTestActive = false;
             Latency          = 0;
             _state           = NetState.Idle;
             _hostPeers.Clear();

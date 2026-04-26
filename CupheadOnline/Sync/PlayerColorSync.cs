@@ -253,7 +253,16 @@ namespace CupheadOnline.Sync
 
         static void TrackBuiltIn(PlayerId playerId)
         {
-            var player = PlayerManager.GetPlayer(playerId);
+            AbstractPlayerController player = null;
+            try
+            {
+                player = PlayerManager.GetPlayer(playerId);
+            }
+            catch
+            {
+                return;
+            }
+
             if (player == null)
                 return;
 

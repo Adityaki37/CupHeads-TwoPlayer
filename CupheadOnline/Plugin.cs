@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
@@ -35,7 +36,13 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgShowBattleAssistHud;
         static ConfigEntry<bool> _cfgEnableQoLHotkeys;
         static ConfigEntry<bool> _cfgLatencyFriendlyDamage;
+        static ConfigEntry<bool> _cfgVanillaTwoPlayerOnline;
         static ConfigEntry<bool> _cfgEnableLocalDevSession;
+        static ConfigEntry<bool> _cfgUseLocalLoopbackPacketHarness;
+        static ConfigEntry<bool> _cfgAutoRunLocalDevE2E;
+        static ConfigEntry<bool> _cfgAutoRunLocalDevTutorial;
+        static ConfigEntry<bool> _cfgUseSeparateSavePath;
+        static ConfigEntry<string> _cfgSeparateSavePath;
         static ConfigEntry<bool> _cfgEnableStartupSplash;
         static ConfigEntry<bool> _cfgStartupSplashAllowSkip;
         static ConfigEntry<bool> _cfgStartupSplashStaticOverlay;
@@ -54,7 +61,22 @@ namespace CupheadOnline
         public static bool ShowBattleAssistHud => _cfgShowBattleAssistHud == null || _cfgShowBattleAssistHud.Value;
         public static bool EnableQoLHotkeys => _cfgEnableQoLHotkeys == null || _cfgEnableQoLHotkeys.Value;
         public static bool LatencyFriendlyDamage => _cfgLatencyFriendlyDamage == null || _cfgLatencyFriendlyDamage.Value;
+        public static bool VanillaTwoPlayerOnline => _cfgVanillaTwoPlayerOnline == null || _cfgVanillaTwoPlayerOnline.Value;
         public static bool EnableLocalDevSession => _cfgEnableLocalDevSession != null && _cfgEnableLocalDevSession.Value;
+        public static bool UseLocalLoopbackPacketHarness => _cfgUseLocalLoopbackPacketHarness == null || _cfgUseLocalLoopbackPacketHarness.Value;
+        public static bool AutoRunLocalDevE2E => _cfgAutoRunLocalDevE2E != null && _cfgAutoRunLocalDevE2E.Value;
+        public static bool AutoRunLocalDevTutorial => _cfgAutoRunLocalDevTutorial != null && _cfgAutoRunLocalDevTutorial.Value;
+        public static bool UseSeparateSavePath => _cfgUseSeparateSavePath != null && _cfgUseSeparateSavePath.Value;
+        public static string SeparateSavePath
+        {
+            get
+            {
+                string configured = _cfgSeparateSavePath == null ? null : _cfgSeparateSavePath.Value;
+                if (!string.IsNullOrEmpty(configured))
+                    return configured;
+                return Path.Combine(Path.Combine(Paths.BepInExRootPath, "CupHeads"), "Saves");
+            }
+        }
         public static bool EnableStartupSplash => _cfgEnableStartupSplash == null || _cfgEnableStartupSplash.Value;
         public static bool StartupSplashAllowSkip => _cfgStartupSplashAllowSkip == null || _cfgStartupSplashAllowSkip.Value;
         public static bool StartupSplashStaticOverlay => _cfgStartupSplashStaticOverlay != null && _cfgStartupSplashStaticOverlay.Value;
@@ -96,8 +118,20 @@ namespace CupheadOnline
                 "Enable CupHeads hotkeys: F6 resync, F7 boss bars, F9 copy diagnostics, F10 battle HUD, F11 dev lab.");
             _cfgLatencyFriendlyDamage = Config.Bind("Networking", "LatencyFriendlyDamage", true,
                 "Trust each peer for damage to their own player body. The host still owns scenes, saves, boss state, RNG, and progression.");
+            _cfgVanillaTwoPlayerOnline = Config.Bind("Networking", "VanillaTwoPlayerOnline", true,
+                "Use the focused two-player model: clients send input only, the host runs Cuphead's real local co-op Player Two, and host snapshots correct client visuals.");
             _cfgEnableLocalDevSession = Config.Bind("Debug", "EnableLocalDevSessionHotkey", true,
                 "Enable the F11 dev lab and local simulation: Player One is local, Player Two is driven through CupHeads' remote-input path on the same PC.");
+            _cfgUseLocalLoopbackPacketHarness = Config.Bind("Debug", "UseLocalLoopbackPacketHarness", true,
+                "When local dev simulation is active, inject Player Two input through SteamNetManager packet serialization/dispatch instead of calling the remote input driver directly.");
+            _cfgAutoRunLocalDevE2E = Config.Bind("Debug", "AutoRunLocalDevE2E", false,
+                "Automatically run a local-dev save-to-map-to-boss multiplayer smoke test. Intended for a separate test copy only.");
+            _cfgAutoRunLocalDevTutorial = Config.Bind("Debug", "AutoRunLocalDevTutorial", false,
+                "Automatically create/use a fresh local-dev test save and load the tutorial. Intended for a separate test copy only.");
+            _cfgUseSeparateSavePath = Config.Bind("Debug", "UseSeparateSavePath", false,
+                "Redirect Cuphead save files to a separate folder. Use this only for test copies so normal saves are not touched.");
+            _cfgSeparateSavePath = Config.Bind("Debug", "SeparateSavePath", "",
+                "Optional absolute folder for redirected Cuphead save files. Empty means BepInEx/CupHeads/Saves.");
             _cfgEnableStartupSplash = Config.Bind("StartupSplash", "EnableStartupSplash", true,
                 "Play BepInEx/plugins/CupheadOnline/Assets/CupHeadsIntro.mp4 over the game's startup/title intro.");
             _cfgStartupSplashAllowSkip = Config.Bind("StartupSplash", "AllowSkip", true,
@@ -127,6 +161,7 @@ namespace CupheadOnline
                 Log.LogInfo("[Net] " + msg);
             };
             Net.TryInitializeSteam();
+            Log.LogInfo("[Mode] VanillaTwoPlayerOnline=" + VanillaTwoPlayerOnline);
 
             // ── Diagnostic: scan our own assembly types and expose any failures ──
             try
@@ -152,6 +187,7 @@ namespace CupheadOnline
             var registeredPatchTypes = new HashSet<Type>();
 
             // Core UI — SlotSelect patches inject the native MULTIPLAYER menu item
+            PatchTracked(harmony, registeredPatchTypes, typeof(CloudSavePathPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(StartScreenSplashGatePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(StartScreenAudioSplashGatePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(SlotSelectAwakePatch));
@@ -315,13 +351,18 @@ namespace CupheadOnline
             Net?.Poll();
             MultiplayerSession.EnsureCupheadMultiplayerState();
             LocalDevSession.Update();
+            LocalDevE2ETest.Update();
+            LocalDevTutorialLauncher.Update();
             ClientInputFramePump.Update();
             LoadoutReplicator.Update();
             EnemySyncManager.HostTick();
-            ExtraRemoteAvatarManager.Update();
-            ExtraParticipantDamageBridge.Update();
-            ExtraParticipantTracker.Update();
-            ExtraParticipantReviveVisuals.Update();
+            if (!VanillaTwoPlayerOnline)
+            {
+                ExtraRemoteAvatarManager.Update();
+                ExtraParticipantDamageBridge.Update();
+                ExtraParticipantTracker.Update();
+                ExtraParticipantReviveVisuals.Update();
+            }
             PlayerColorSync.Update();
             QoLHotkeys.Tick();
             BossHealthScaler.Update();
@@ -422,6 +463,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.23";
+        public const string VERSION = "1.2.29";
     }
 }

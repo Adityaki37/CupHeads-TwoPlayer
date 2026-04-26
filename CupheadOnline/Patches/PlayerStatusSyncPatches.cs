@@ -8,6 +8,7 @@ namespace CupheadOnline.Patches
     {
         static void Postfix(PlayerStatsManager __instance)
         {
+            PlayerStatusPatchHelpers.RestoreSpawnHealthIfNeeded(__instance);
             PlayerStatusPatchHelpers.PushLocalStatus(__instance);
         }
     }
@@ -60,6 +61,27 @@ namespace CupheadOnline.Patches
 
     static class PlayerStatusPatchHelpers
     {
+        internal static void RestoreSpawnHealthIfNeeded(PlayerStatsManager stats)
+        {
+            if (!MultiplayerSession.IsActive || stats == null)
+                return;
+
+            var player = stats.GetComponent<AbstractPlayerController>();
+            if (player == null)
+                return;
+
+            if (!MultiplayerSession.IsAuthoritativePlayer(player.id))
+                return;
+
+            if (stats.Health > 0 || stats.HealthMax <= 0)
+                return;
+
+            int restoredHealth = System.Math.Max(1, stats.HealthMax);
+            stats.SetHealth(restoredHealth);
+            Plugin.Log.LogWarning(
+                "[SpawnHealth] Restored " + player.id + " from zero HP on level init (" + CurrentLevelName() + ").");
+        }
+
         internal static void PushLocalStatus(PlayerStatsManager stats)
         {
             if (!MultiplayerSession.IsActive || stats == null)
@@ -72,6 +94,18 @@ namespace CupheadOnline.Patches
                 return;
 
             ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static string CurrentLevelName()
+        {
+            try
+            {
+                return Level.Current == null ? "unknown" : Level.Current.CurrentLevel.ToString();
+            }
+            catch
+            {
+                return "unknown";
+            }
         }
     }
 }

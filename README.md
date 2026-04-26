@@ -1,6 +1,14 @@
 # CupHeads
 
-Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod setup for you.
+Steam P2P multiplayer for Cuphead, focused on a more stable two-player online co-op path, plus a desktop installer that handles the mod setup for you.
+
+## About this fork
+
+This repository is built from [Germanized/CupHeads](https://github.com/Germanized/CupHeads). The original project explored broader Cuphead multiplayer support, including larger lobby and extra-participant experiments. This fork intentionally narrows the default gameplay target back to Cuphead's native two-player co-op shape.
+
+The main difference is the focused `VanillaTwoPlayerOnline` mode: the host runs Cuphead's real local co-op `PlayerOne` and `PlayerTwo`, while the guest sends input frames that drive the host's `PlayerTwo`. By favoring a strict two-player model over experimental extra players, this fork avoids several classes of boss-script, map-avatar, death/revive, and UI bugs that appear when the game is pushed beyond the two player slots it was built around.
+
+In short: fewer players by design, fewer fragile custom scene patches in the main path.
 
 ## What this repo contains
 
@@ -13,6 +21,7 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 ### Multiplayer
 
 - Steam P2P transport built for Cuphead through BepInEx + Harmony
+- Two-player focused online mode enabled by default: clients send input only, and the host runs Cuphead's real local co-op Player Two
 - Host, join, invite friend, retry last action, and export bug reports
 - Host-led lobby flow with integrated `SAVE SLOT`, `LEAD`, and `START GAME` actions
 - Host-authoritative scene syncing for level and menu transitions
@@ -31,6 +40,7 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 - Battle Assist HUD with a live fight timer, deaths, retries, parries, and optional boss HP multiplier readout
 - QoL hotkeys: `F6` quick resync, `F7` boss health bars, `F9` copy diagnostics, `F10` Battle Assist HUD, and `F11` Dev Lab
 - Local Dev Lab with a same-PC simulator, letting one PC test the mod's remote-input path by driving Player Two through CupHeads instead of needing a second Steam player
+- Packet-loopback test harness for local dev mode, so simulated guest input is serialized and dispatched through `SteamNetManager` before it controls Player Two
 - Optional startup splash video with audio, skip support, and a configurable Cuphead-style film-static overlay
 - Optional boss HP scaling per extra active player, configurable in BepInEx and disabled by default
 - Recovery and resync tools for active sessions, including exported diagnostics bundles
@@ -48,12 +58,11 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 - Toggleable networking and dev-test settings through the BepInEx config, including latency-friendly damage and the F11 Dev Lab hotkey
 - Toggleable startup splash settings through the BepInEx config, including volume, skip support, and static overlay intensity
 
-### Experimental Expanded Sessions
+### Two-Player Focus
 
-- Larger Steam lobbies with tracked extra participants beyond the vanilla two-player setup
-- Runtime extra-player avatars, extra-participant HUD summaries, and experimental revive / damage bridges
-- Shared targeting, camera, and several platforming / boss hooks patched to be more 3+-aware
-- This part of the mod is still experimental: Cuphead has many bespoke scene scripts, so not every fight or event is guaranteed to behave perfectly with extra active participants
+- This fork defaults to the native Cuphead two-player model.
+- Extra-player and larger-lobby code paths from the broader project are not the primary supported path here.
+- The tradeoff is deliberate: fewer simultaneous players, but fewer broken boss scripts, fewer fake-avatar edge cases, and a cleaner remote-input model.
 
 ### Characters and DLC
 
@@ -64,8 +73,8 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 ## Current Gameplay Limit
 
 - Vanilla Cuphead is still deeply built around `PlayerOne` and `PlayerTwo`
-- CupHeads now includes experimental extra-participant support, but it does not magically turn every Cuphead scene into a fully solved unlimited-player game
-- The more custom a boss, cutscene, or scripted event is, the more likely it still needs scene-specific work
+- This fork does not try to make every Cuphead scene support unlimited players
+- The supported goal is stable online co-op for two players, matching the base game's local co-op assumptions as closely as possible
 
 ### Installer
 
@@ -86,7 +95,7 @@ Steam P2P multiplayer for Cuphead, plus a desktop installer that handles the mod
 
 ## Quick Start
 
-1. Download `CupHeads.exe` from [Releases](https://github.com/Germanized/CupHeads/releases).
+1. Download `CupHeads.exe` from [Releases](https://github.com/Adityaki37/CupHeads-TwoPlayer/releases).
 2. Run the installer.
 3. Let it detect your Cuphead folder, or browse to it manually.
 4. Click Install.
@@ -146,7 +155,9 @@ Internal scenes such as Porkrind's shop use the same routing path: the host rema
 
 ## Local Dev Testing
 
-Press `F11` to open the CupHeads Dev Lab. This does not create a Steam lobby. Instead, it can mark Player One as the local host player and Player Two as the network-controlled participant, then feed Player Two through CupHeads' `RemoteInputDriver`.
+Press `F11` to open the CupHeads Dev Lab. This does not create a Steam lobby. Instead, it can mark Player One as the local host player and Player Two as the network-controlled participant.
+
+By default, local dev mode uses a packet-loopback harness: simulated Player Two input is serialized into CupHeads packets, injected through `SteamNetManager`, dispatched like a guest packet, and only then applied to Player Two. This is closer to a real Steam guest than calling the remote input driver directly, while still being fast enough to run on one PC.
 
 Recommended solo test flow:
 
@@ -159,7 +170,7 @@ Recommended solo test flow:
 
 The Dev Lab also has `START SIMULATOR`, `COPY DIAGNOSTICS`, and `CLOSE` actions. `START SIMULATOR` keeps you in the current scene, while `START + OPEN SAVE SELECT` starts the simulator and jumps to the save-select flow.
 
-This mode is meant for auditing movement, map interactions, equip/shop menus, death/revive behavior, and boss fights without waiting for a second tester. It is not a substitute for a real Steam P2P test because it does not simulate network jitter, packet loss, Steam lobby joining, or two separate machines.
+This mode is meant for auditing movement, map interactions, equip/shop menus, death/revive behavior, and boss fights without waiting for a second tester. It is not a full substitute for a real Steam P2P test because it does not prove Steam overlay invites, lobby identity, real packet relay, real latency, or two separate machines.
 
 Two-window testing note:
 
@@ -211,7 +222,8 @@ The packaged installer is written to `CupheadInstaller\dist\CupHeads.exe`.
 
 ## Credits
 
-- Germanized and Sh0kr for the mod
+- Built from [Germanized/CupHeads](https://github.com/Germanized/CupHeads)
+- Germanized and Sh0kr for the original mod foundation
 - Made for Daniel
 - Special thanks to Internallinked
 - BepInEx for the mod framework

@@ -50,7 +50,7 @@ namespace CupheadOnline.Sync
                 return false;
             }
 
-            if (Plugin.Net != null && Plugin.Net.IsConnected)
+            if (Plugin.Net != null && Plugin.Net.IsConnected && !Plugin.Net.IsLocalLoopbackTestActive)
             {
                 message = "Leave the Steam session before starting local dev mode.";
                 return false;
@@ -70,7 +70,24 @@ namespace CupheadOnline.Sync
             RemotePlayer.Reset(PlayerId.PlayerTwo);
             ParticipantStatusTracker.CaptureLocal(PlayerId.PlayerOne);
             ParticipantStatusTracker.CaptureLocal(PlayerId.PlayerTwo);
+
+            string loopbackMessage = null;
+            if (Plugin.UseLocalLoopbackPacketHarness && Plugin.Net != null)
+            {
+                if (!Plugin.Net.StartLocalLoopbackTestPeer(out loopbackMessage))
+                {
+                    IsActive = false;
+                    RemoteInputDriver.Reset(PlayerId.PlayerTwo);
+                    RemotePlayer.Reset(PlayerId.PlayerTwo);
+                    MultiplayerSession.End();
+                    message = loopbackMessage;
+                    return false;
+                }
+            }
+
             message = "Local dev session active. P1 uses Player One controls; P2 uses Player Two/controller controls.";
+            if (!string.IsNullOrEmpty(loopbackMessage))
+                message += " " + loopbackMessage;
             Plugin.Log.LogInfo("[LocalDev] Started local same-PC session.");
             return true;
         }
@@ -111,6 +128,8 @@ namespace CupheadOnline.Sync
                 return;
 
             IsActive = false;
+            if (Plugin.Net != null && Plugin.Net.IsLocalLoopbackTestActive)
+                Plugin.Net.StopLocalLoopbackTestPeer();
             RemoteInputDriver.Reset(PlayerId.PlayerTwo);
             RemotePlayer.Reset(PlayerId.PlayerTwo);
             MultiplayerSession.End();
@@ -135,6 +154,14 @@ namespace CupheadOnline.Sync
 
             var input = UniversalInputRouter.BuildLocalInputFrameForPlayer(PlayerId.PlayerTwo);
             input.Tick = NextInputTick();
+            if (Plugin.UseLocalLoopbackPacketHarness
+             && Plugin.Net != null
+             && Plugin.Net.IsLocalLoopbackTestActive
+             && Plugin.Net.InjectLocalLoopbackPacket(PacketType.InputFrame, ref input))
+            {
+                return;
+            }
+
             RemoteInputDriver.Apply(PlayerId.PlayerTwo, input);
         }
 
