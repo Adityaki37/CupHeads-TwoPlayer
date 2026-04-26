@@ -37,10 +37,16 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgEnableQoLHotkeys;
         static ConfigEntry<bool> _cfgLatencyFriendlyDamage;
         static ConfigEntry<bool> _cfgVanillaTwoPlayerOnline;
+        static ConfigEntry<string> _cfgNetworkTransportMode;
+        static ConfigEntry<string> _cfgLanHostAddress;
+        static ConfigEntry<int> _cfgLanPort;
+        static ConfigEntry<bool> _cfgAutoStartLanTransport;
         static ConfigEntry<bool> _cfgEnableLocalDevSession;
         static ConfigEntry<bool> _cfgUseLocalLoopbackPacketHarness;
         static ConfigEntry<bool> _cfgAutoRunLocalDevE2E;
         static ConfigEntry<bool> _cfgAutoRunLocalDevTutorial;
+        static ConfigEntry<bool> _cfgAutoRunLanSteamE2E;
+        static ConfigEntry<string> _cfgAutoRunLanSteamE2ETarget;
         static ConfigEntry<bool> _cfgUseSeparateSavePath;
         static ConfigEntry<string> _cfgSeparateSavePath;
         static ConfigEntry<bool> _cfgEnableStartupSplash;
@@ -62,10 +68,17 @@ namespace CupheadOnline
         public static bool EnableQoLHotkeys => _cfgEnableQoLHotkeys == null || _cfgEnableQoLHotkeys.Value;
         public static bool LatencyFriendlyDamage => _cfgLatencyFriendlyDamage == null || _cfgLatencyFriendlyDamage.Value;
         public static bool VanillaTwoPlayerOnline => _cfgVanillaTwoPlayerOnline == null || _cfgVanillaTwoPlayerOnline.Value;
+        public static string NetworkTransportMode => _cfgNetworkTransportMode == null ? "Steam" : (_cfgNetworkTransportMode.Value ?? "Steam").Trim();
+        public static string LanHostAddress => _cfgLanHostAddress == null ? "127.0.0.1" : (_cfgLanHostAddress.Value ?? "127.0.0.1").Trim();
+        public static int LanPort => _cfgLanPort == null ? 7890 : Mathf.Clamp(_cfgLanPort.Value, 1, 65535);
+        public static bool AutoStartLanTransport => _cfgAutoStartLanTransport != null && _cfgAutoStartLanTransport.Value;
         public static bool EnableLocalDevSession => _cfgEnableLocalDevSession != null && _cfgEnableLocalDevSession.Value;
         public static bool UseLocalLoopbackPacketHarness => _cfgUseLocalLoopbackPacketHarness == null || _cfgUseLocalLoopbackPacketHarness.Value;
         public static bool AutoRunLocalDevE2E => _cfgAutoRunLocalDevE2E != null && _cfgAutoRunLocalDevE2E.Value;
         public static bool AutoRunLocalDevTutorial => _cfgAutoRunLocalDevTutorial != null && _cfgAutoRunLocalDevTutorial.Value;
+        public static bool AutoRunLanSteamE2E => _cfgAutoRunLanSteamE2E != null && _cfgAutoRunLanSteamE2E.Value;
+        public static string AutoRunLanSteamE2ETarget =>
+            _cfgAutoRunLanSteamE2ETarget == null ? string.Empty : (_cfgAutoRunLanSteamE2ETarget.Value ?? string.Empty).Trim();
         public static bool UseSeparateSavePath => _cfgUseSeparateSavePath != null && _cfgUseSeparateSavePath.Value;
         public static string SeparateSavePath
         {
@@ -120,6 +133,14 @@ namespace CupheadOnline
                 "Trust each peer for damage to their own player body. The host still owns scenes, saves, boss state, RNG, and progression.");
             _cfgVanillaTwoPlayerOnline = Config.Bind("Networking", "VanillaTwoPlayerOnline", true,
                 "Use the focused two-player model: clients send input only, the host runs Cuphead's real local co-op Player Two, and host snapshots correct client visuals.");
+            _cfgNetworkTransportMode = Config.Bind("Networking", "TransportMode", "Steam",
+                "Network transport to use. Steam = normal Steam lobby/P2P. LanHost/LanClient = dev-only LAN emulation using the same packet handlers as Steam.");
+            _cfgLanHostAddress = Config.Bind("Networking", "LanHostAddress", "127.0.0.1",
+                "Host address for TransportMode=LanClient. Use 127.0.0.1 for two local processes or the host PC's LAN IP for two machines.");
+            _cfgLanPort = Config.Bind("Networking", "LanPort", 7890,
+                "UDP port used by the dev-only LAN Steam emulation transport.");
+            _cfgAutoStartLanTransport = Config.Bind("Networking", "AutoStartLanTransport", false,
+                "Automatically start LanHost or LanClient at boot when TransportMode is set to a LAN mode.");
             _cfgEnableLocalDevSession = Config.Bind("Debug", "EnableLocalDevSessionHotkey", true,
                 "Enable the F11 dev lab and local simulation: Player One is local, Player Two is driven through CupHeads' remote-input path on the same PC.");
             _cfgUseLocalLoopbackPacketHarness = Config.Bind("Debug", "UseLocalLoopbackPacketHarness", true,
@@ -128,6 +149,10 @@ namespace CupheadOnline
                 "Automatically run a local-dev save-to-map-to-boss multiplayer smoke test. Intended for a separate test copy only.");
             _cfgAutoRunLocalDevTutorial = Config.Bind("Debug", "AutoRunLocalDevTutorial", false,
                 "Automatically create/use a fresh local-dev test save and load the tutorial. Intended for a separate test copy only.");
+            _cfgAutoRunLanSteamE2E = Config.Bind("Debug", "AutoRunLanSteamE2E", false,
+                "Automatically run a two-process LAN transport smoke test. Start one copy as LanHost and one as LanClient with AutoStartLanTransport enabled.");
+            _cfgAutoRunLanSteamE2ETarget = Config.Bind("Debug", "AutoRunLanSteamE2ETarget", "",
+                "Optional Levels enum name for the LAN smoke test boss target, such as Slime, Frogs, Flower, or Veggies. Empty means nearest boss.");
             _cfgUseSeparateSavePath = Config.Bind("Debug", "UseSeparateSavePath", false,
                 "Redirect Cuphead save files to a separate folder. Use this only for test copies so normal saves are not touched.");
             _cfgSeparateSavePath = Config.Bind("Debug", "SeparateSavePath", "",
@@ -149,6 +174,9 @@ namespace CupheadOnline
             _cfgPreferredPlayerColor = Config.Bind("Cosmetics", "PreferredPlayerColor", PlayerColorSync.AutoSelection,
                 "Lobby and in-game player color. 0 = Auto, 1 = Classic, 2+ = fixed tint.");
 
+            if (AutoStartLanTransport || AutoRunLanSteamE2E)
+                Application.runInBackground = true;
+
             // Networking manager — Steam P2P transport (lobby + invite flow)
             Net = new SteamNetManager();
             Net.OnStatusChanged += msg =>
@@ -161,7 +189,7 @@ namespace CupheadOnline
                 Log.LogInfo("[Net] " + msg);
             };
             Net.TryInitializeSteam();
-            Log.LogInfo("[Mode] VanillaTwoPlayerOnline=" + VanillaTwoPlayerOnline);
+            Log.LogInfo("[Mode] VanillaTwoPlayerOnline=" + VanillaTwoPlayerOnline + "; TransportMode=" + NetworkTransportMode);
 
             // ── Diagnostic: scan our own assembly types and expose any failures ──
             try
@@ -201,6 +229,7 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerLevelInitPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(StatsLevelInitPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(LevelStartPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(LevelTransitionInCompletePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerDeathStatePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerReviveStatePatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerStatsInitialStatusPatch));
@@ -264,6 +293,8 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(ParryPatch));
 
             // Damage authority
+            PatchTracked(harmony, registeredPatchTypes, typeof(EnemyDamageHostAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(EnemyBruteForceDamageHostAuthorityPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(PlayerDamagePatch));
 
             // Scene transitions
@@ -291,6 +322,8 @@ namespace CupheadOnline
             // if media decoding starts while the chainloader is still patching.
             yield return null;
             yield return null;
+            if (AutoStartLanTransport && Net != null && !Net.IsConnected && !Net.IsInLobby)
+                Net.TryAutoStartConfiguredTransport();
             StartupSplashPlayer.TryShow();
         }
 
@@ -350,9 +383,11 @@ namespace CupheadOnline
             MainThreadQueue.Drain();
             Net?.Poll();
             MultiplayerSession.EnsureCupheadMultiplayerState();
+            LevelStartSync.Update();
             LocalDevSession.Update();
             LocalDevE2ETest.Update();
             LocalDevTutorialLauncher.Update();
+            LanSteamE2ETest.Update();
             ClientInputFramePump.Update();
             LoadoutReplicator.Update();
             EnemySyncManager.HostTick();
@@ -370,6 +405,11 @@ namespace CupheadOnline
             BattleAssistHud.Tick();
             SessionSync.Update();
             SessionPausePanel.Ensure();
+        }
+
+        void LateUpdate()
+        {
+            EnemySyncManager.ClientLateTick();
         }
 
         void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -440,6 +480,10 @@ namespace CupheadOnline
                           + "Show Battle Assist HUD: " + ShowBattleAssistHud + nl
                           + "QoL Hotkeys Enabled: " + EnableQoLHotkeys + nl
                           + "Latency Friendly Damage: " + LatencyFriendlyDamage + nl
+                          + "Transport Mode: " + NetworkTransportMode + nl
+                          + "LAN Host Address: " + LanHostAddress + nl
+                          + "LAN Port: " + LanPort + nl
+                          + "LAN Auto Start: " + AutoStartLanTransport + nl
                           + "Local Dev Session Enabled: " + EnableLocalDevSession + nl
                           + "Local Dev Session Active: " + LocalDevSession.IsActive + nl
                           + "Startup Splash Enabled: " + EnableStartupSplash + nl
@@ -463,6 +507,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.29";
+        public const string VERSION = "1.2.30";
     }
 }

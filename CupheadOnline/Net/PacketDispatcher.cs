@@ -102,6 +102,7 @@ namespace CupheadOnline.Net
                     RngSync.SetSeed(pkt.RngSeed);
                     if (!MultiplayerSession.IsHost)
                     {
+                        LevelStartSync.BeginClientLevelLoad((Levels)pkt.LevelEnum);
                         SceneSyncState.AllowNextClientLevelLoad();
                         SceneLoader.LoadLevel((Levels)pkt.LevelEnum, SceneLoader.Transition.Iris);
                     }
@@ -208,6 +209,7 @@ namespace CupheadOnline.Net
                         }
 
                         SceneSyncState.AllowNextClientLevelLoad();
+                        LevelStartSync.BeginClientLevelLoad((Levels)pkt.CurrentLevel);
                         SceneLoader.LoadLevel((Levels)pkt.CurrentLevel, SceneLoader.Transition.Iris);
                     }
                     break;

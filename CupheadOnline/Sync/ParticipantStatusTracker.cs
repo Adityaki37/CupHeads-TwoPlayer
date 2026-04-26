@@ -56,6 +56,8 @@ namespace CupheadOnline.Sync
                 IsKnown = true,
                 Tick = pkt.Tick,
             };
+
+            ApplyRemoteBuiltInStatus(pkt);
         }
 
         public static bool TryGet(byte participantId, out ParticipantStatus status)
@@ -86,6 +88,11 @@ namespace CupheadOnline.Sync
 
             status = default(ParticipantStatus);
             return false;
+        }
+
+        public static bool TryGetStored(byte participantId, out ParticipantStatus status)
+        {
+            return _statuses.TryGetValue(participantId, out status);
         }
 
         public static bool TryBuildLocalPacket(AbstractPlayerController player, out PlayerStatusPacket pkt)
@@ -341,6 +348,42 @@ namespace CupheadOnline.Sync
             {
                 return null;
             }
+        }
+
+        static void ApplyRemoteBuiltInStatus(PlayerStatusPacket pkt)
+        {
+            if (!MultiplayerSession.IsActive)
+                return;
+            if (pkt.ParticipantId > (byte)PlayerId.PlayerTwo)
+                return;
+
+            var playerId = (PlayerId)pkt.ParticipantId;
+            if (MultiplayerSession.IsAuthoritativePlayer(playerId))
+                return;
+
+            var player = GetPlayerSafe(playerId);
+            if (player == null || player.stats == null)
+                return;
+
+            int maxHealth = Mathf.Clamp(pkt.HealthMax, 1, 255);
+            int health = Mathf.Clamp(pkt.Health, 0, maxHealth);
+            if (!pkt.IsDead && health <= 0)
+                health = 1;
+
+            if (player.stats.Health == health && player.stats.HealthMax == maxHealth)
+                return;
+
+            player.stats.SetHealth(health);
+            Plugin.Log.LogInfo(
+                "[StatusSync] Applied remote built-in status for "
+                + playerId
+                + " hp="
+                + health
+                + "/"
+                + maxHealth
+                + " dead="
+                + pkt.IsDead
+                + ".");
         }
     }
 }

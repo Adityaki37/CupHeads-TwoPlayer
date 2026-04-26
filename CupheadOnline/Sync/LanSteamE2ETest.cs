@@ -1,0 +1,1017 @@
+using System;
+using System.IO;
+using System.Reflection;
+using CupheadOnline.Net;
+using CupheadOnline.Patches;
+using CupheadOnline.UI;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+namespace CupheadOnline.Sync
+{
+    /// <summary>
+    /// Two-process smoke test for the LAN Steam-emulation transport. The host
+    /// performs the normal save -> map -> boss flow while the client continuously
+    /// sends Player Two input frames over UDP through SteamNetManager.
+    /// </summary>
+    internal static class LanSteamE2ETest
+    {
+        enum Stage
+        {
+            Idle,
+            WaitConnection,
+            LoadSlotSelect,
+            WaitSlotSelect,
+            WaitMap,
+            WalkToBoss,
+            OpenStartCard,
+            WaitLevel,
+            Fight,
+            ClientObserve,
+            Done,
+            Failed,
+        }
+
+        const float WalkTimeout = 35f;
+        const float CardTimeout = 10f;
+        const float LevelTimeout = 30f;
+        const float FightDuration = 16f;
+
+        static readonly BindingFlags InstanceAny =
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+        static readonly FieldInfo SlotSelectionField =
+            typeof(SlotSelectScreen).GetField("_slotSelection", InstanceAny);
+        static readonly FieldInfo SlotsField =
+            typeof(SlotSelectScreen).GetField("slots", InstanceAny);
+        static readonly MethodInfo EnterGameMethod =
+            typeof(SlotSelectScreen).GetMethod("EnterGame", InstanceAny);
+        static readonly FieldInfo LevelField =
+            typeof(MapLevelLoader).GetField("level", InstanceAny);
+        static readonly MethodInfo MapLevelLoaderActivateMethod =
+            typeof(MapLevelLoader).GetMethod("Activate", InstanceAny, null, new[] { typeof(MapPlayerController) }, null);
+
+        static Stage _stage = Stage.Idle;
+        static float _stageStartedAt;
+        static float _lastLogAt;
+        static MapLevelLoader _targetLoader;
+        static Levels _targetLevel;
+        static int _saveSlot = -1;
+        static bool _fallbackMapLoadTried;
+        static bool _fallbackUnityLevelLoadTried;
+        static bool _sawRemoteInput;
+        static bool _clientCapturedMap;
+        static bool _clientCapturedLevel;
+        static bool _clientCapturedFightEnd;
+        static bool _clientLevelReached;
+        static bool _remoteCheckpointReceived;
+        static float _clientLevelReachedAt;
+        static bool _hasFightStartBossHealth;
+        static string _fightStartBossName = string.Empty;
+        static float _fightStartBossHealth;
+        static float _fightStartBossTotal;
+        static Vector2 _hostAxis;
+        static uint _hostButtons;
+        static uint _hostDownButtons;
+        static int _hostDownUntilFrame;
+        static Vector2 _clientAxis;
+        static uint _clientButtons;
+        static uint _clientDownButtons;
+        static int _clientDownUntilFrame;
+
+        public static void Update()
+        {
+            ClearExpiredDownButtons();
+
+            if (!Plugin.AutoRunLanSteamE2E)
+            {
+                if (_stage != Stage.Idle && _stage != Stage.Done && _stage != Stage.Failed)
+                    ResetScriptedInput();
+                return;
+            }
+
+            try
+            {
+                if (_stage == Stage.Idle)
+                    Begin();
+
+                if (_stage == Stage.Failed || _stage == Stage.Done)
+                    return;
+
+                if (MultiplayerSession.IsClient)
+                    UpdateClientScript();
+
+                switch (_stage)
+                {
+                    case Stage.WaitConnection:
+                        WaitConnection();
+                        break;
+                    case Stage.LoadSlotSelect:
+                        LoadSlotSelect();
+                        break;
+                    case Stage.WaitSlotSelect:
+                        WaitSlotSelect();
+                        break;
+                    case Stage.WaitMap:
+                        WaitMap();
+                        break;
+                    case Stage.WalkToBoss:
+                        WalkToBoss();
+                        break;
+                    case Stage.OpenStartCard:
+                        OpenStartCard();
+                        break;
+                    case Stage.WaitLevel:
+                        WaitLevel();
+                        break;
+                    case Stage.Fight:
+                        Fight();
+                        break;
+                    case Stage.ClientObserve:
+                        ClientObserve();
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Fail("Exception: " + ex);
+            }
+        }
+
+        public static bool TryHandleSessionSignal(SessionSignalPacket pkt)
+        {
+            if (!Plugin.AutoRunLanSteamE2E || pkt.Kind != SessionSignalKind.LanSteamE2ECheckpoint)
+                return false;
+
+            if (MultiplayerSession.IsClient)
+            {
+                _remoteCheckpointReceived = true;
+                Log("Received host fight checkpoint.");
+            }
+            return true;
+        }
+
+        public static bool TryGetLocalAxis(PlayerId playerId, int actionId, out float value)
+        {
+            value = 0f;
+            if (!Plugin.AutoRunLanSteamE2E)
+                return false;
+
+            if (MultiplayerSession.IsHost && playerId == PlayerId.PlayerOne)
+            {
+                value = actionId == 0 ? _hostAxis.x : actionId == 1 ? _hostAxis.y : 0f;
+                return true;
+            }
+
+            if (MultiplayerSession.IsClient && (playerId == PlayerId.None || playerId == PlayerId.PlayerTwo))
+            {
+                value = actionId == 0 ? _clientAxis.x : actionId == 1 ? _clientAxis.y : 0f;
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool TryGetLocalButton(PlayerId playerId, int actionId, bool down, bool up, out bool value)
+        {
+            value = false;
+            if (!Plugin.AutoRunLanSteamE2E || actionId < 0 || actionId >= 32)
+                return false;
+
+            if (MultiplayerSession.IsHost && playerId == PlayerId.PlayerOne)
+            {
+                value = ReadButton(_hostButtons, _hostDownButtons, actionId, down, up);
+                return true;
+            }
+
+            if (MultiplayerSession.IsClient && (playerId == PlayerId.None || playerId == PlayerId.PlayerTwo))
+            {
+                value = ReadButton(_clientButtons, _clientDownButtons, actionId, down, up);
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool ReadButton(uint buttons, uint downButtons, int actionId, bool down, bool up)
+        {
+            if (up)
+                return false;
+            uint mask = 1u << actionId;
+            return down ? (downButtons & mask) != 0u : (buttons & mask) != 0u;
+        }
+
+        static void Begin()
+        {
+            Time.timeScale = 1f;
+            if (Plugin.Net == null)
+            {
+                Fail("Plugin.Net was not initialized.");
+                return;
+            }
+
+            Log("Starting LAN Steam-emulation E2E. Transport=" + Plugin.NetworkTransportMode + ".");
+            if (Plugin.AutoStartLanTransport && !Plugin.Net.IsConnected && !Plugin.Net.IsInLobby)
+                Plugin.Net.TryAutoStartConfiguredTransport();
+            SetStage(Stage.WaitConnection, "Waiting for LAN connection.");
+        }
+
+        static void WaitConnection()
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected)
+            {
+                if (TimedOut(25f))
+                    Fail("LAN peers did not connect. State=" + (Plugin.Net == null ? "none" : Plugin.Net.CurrentStateName) + ".");
+                return;
+            }
+
+            if (Plugin.Net.IsHost)
+                SetStage(Stage.LoadSlotSelect, "LAN host connected; loading save select.");
+            else
+                SetStage(Stage.ClientObserve, "LAN client connected; observing host flow and sending P2 input.");
+        }
+
+        static void LoadSlotSelect()
+        {
+            ResetScriptedInput();
+            if (SceneManager.GetActiveScene().name != "scene_slot_select")
+            {
+                SceneLoader.LoadScene(
+                    Scenes.scene_slot_select,
+                    SceneLoader.Transition.Iris,
+                    SceneLoader.Transition.Iris,
+                    SceneLoader.Icon.Hourglass,
+                    null);
+            }
+
+            SetStage(Stage.WaitSlotSelect, "Waiting for save slots.");
+        }
+
+        static void WaitSlotSelect()
+        {
+            var screen = UnityEngine.Object.FindObjectOfType<SlotSelectScreen>();
+            if (screen == null)
+            {
+                if (TimedOut(15f)) Fail("Slot select screen did not appear.");
+                return;
+            }
+
+            var slots = SlotsField == null ? null : SlotsField.GetValue(screen) as SlotSelectScreenSlot[];
+            if (slots == null || slots.Length == 0)
+            {
+                if (TimedOut(15f)) Fail("Slot select slots were not available.");
+                return;
+            }
+
+            int slotIndex = FindFirstNonEmptySlot(slots);
+            if (slotIndex < 0)
+            {
+                Fail("No non-empty save slot is available for the LAN E2E test.");
+                return;
+            }
+
+            _saveSlot = slotIndex;
+            if (SlotSelectionField != null)
+                SlotSelectionField.SetValue(screen, slotIndex);
+            if (slots[slotIndex] != null)
+                slots[slotIndex].Init(slotIndex);
+
+            Log("Entering save slot " + slotIndex + " through SlotSelectScreen.EnterGame.");
+            if (EnterGameMethod == null)
+            {
+                Fail("Could not find SlotSelectScreen.EnterGame.");
+                return;
+            }
+
+            EnterGameMethod.Invoke(screen, null);
+            SetStage(Stage.WaitMap, "Waiting for world map.");
+        }
+
+        static int FindFirstNonEmptySlot(SlotSelectScreenSlot[] slots)
+        {
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i] == null)
+                    continue;
+                slots[i].Init(i);
+                if (!slots[i].IsEmpty)
+                    return i;
+            }
+            return -1;
+        }
+
+        static void WaitMap()
+        {
+            string sceneName = SceneManager.GetActiveScene().name;
+            if (!sceneName.StartsWith("scene_map_world", StringComparison.Ordinal))
+            {
+                if (!_fallbackMapLoadTried
+                 && sceneName == "scene_slot_select"
+                 && Time.unscaledTime - _stageStartedAt > 4f)
+                {
+                    _fallbackMapLoadTried = true;
+                    ForceLoadSelectedMap();
+                    return;
+                }
+
+                if (TimedOut(25f)) Fail("Map did not load; current scene is " + sceneName + ".");
+                return;
+            }
+
+            if (Map.Current == null || Map.Current.players == null || Map.Current.players.Length < 2)
+                return;
+
+            var p1 = Map.Current.players[0];
+            var p2 = Map.Current.players[1];
+            if (p1 == null || p2 == null)
+                return;
+
+            _targetLoader = ChooseConfiguredBossLoader(p1.transform.position);
+            if (_stage == Stage.Failed)
+                return;
+
+            if (_targetLoader == null)
+                _targetLoader = ChooseNearestBossLoader(p1.transform.position);
+
+            if (_targetLoader == null)
+            {
+                Fail("No active boss MapLevelLoader was found on " + sceneName + ".");
+                return;
+            }
+
+            _targetLevel = GetLoaderLevel(_targetLoader);
+            Log("Map loaded; P1=" + DescribeMapPlayer(p1)
+                + "; P2=" + DescribeMapPlayer(p2)
+                + "; P2 networkControlled=" + MultiplayerSession.IsNetworkControlledPlayer(PlayerId.PlayerTwo)
+                + "; target=" + _targetLevel + ".");
+            CaptureScreen("host_map_" + _targetLevel);
+            SetStage(Stage.WalkToBoss, "Walking to " + _targetLevel + ".");
+        }
+
+        static void WalkToBoss()
+        {
+            if (_targetLoader == null)
+            {
+                Fail("Target loader disappeared while walking.");
+                return;
+            }
+
+            if (Map.Current == null || Map.Current.players == null || Map.Current.players[0] == null)
+                return;
+
+            var p1 = Map.Current.players[0];
+            Vector2 target = GetInteractionPoint(_targetLoader);
+            Vector2 current = p1.transform.position;
+            Vector2 delta = target - current;
+            float distance = delta.magnitude;
+
+            if (Time.unscaledTime - _lastLogAt > 2f)
+            {
+                _lastLogAt = Time.unscaledTime;
+                Log("Walking: distance to " + _targetLevel + " is " + distance.ToString("0.00") + ".");
+            }
+
+            CheckRemoteInput();
+            if (distance <= Mathf.Max(0.2f, _targetLoader.interactionDistance * 0.65f) || distance <= 0.65f)
+            {
+                _hostAxis = Vector2.zero;
+                ActivateTargetLoader(p1);
+                SetStage(Stage.OpenStartCard, "Reached " + _targetLevel + "; opening start card.");
+                return;
+            }
+
+            if (TimedOut(WalkTimeout))
+            {
+                Fail("Could not walk to " + _targetLevel + " within " + WalkTimeout + " seconds.");
+                return;
+            }
+
+            _hostAxis = delta.normalized;
+        }
+
+        static void OpenStartCard()
+        {
+            _hostAxis = Vector2.zero;
+            CheckRemoteInput();
+
+            if (IsAnyStartUiActive())
+            {
+                Log("Start card is active; loading selected map target " + _targetLevel + ".");
+                SceneLoader.LoadLevel(_targetLevel, SceneLoader.Transition.Iris, SceneLoader.Icon.Hourglass, null);
+                SetStage(Stage.WaitLevel, "Confirming boss start card for " + _targetLevel + ".");
+                return;
+            }
+
+            if (Time.unscaledTime - _stageStartedAt < 1.5f)
+                PressHost(CupheadButton.Accept);
+
+            if (TimedOut(CardTimeout))
+                Fail("Boss start card did not open for " + _targetLevel + ".");
+        }
+
+        static void WaitLevel()
+        {
+            _hostAxis = Vector2.zero;
+            CheckRemoteInput();
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            if (sceneName.StartsWith("scene_map_world", StringComparison.Ordinal)
+             || sceneName == "scene_slot_select")
+            {
+                if (!_fallbackUnityLevelLoadTried
+                 && sceneName.StartsWith("scene_map_world", StringComparison.Ordinal)
+                 && Time.unscaledTime - _stageStartedAt > 3f)
+                {
+                    _fallbackUnityLevelLoadTried = true;
+                    ForceUnityLevelLoad();
+                    return;
+                }
+
+                if (TimedOut(LevelTimeout)) Fail("Level did not load after confirming " + _targetLevel + "; current scene is " + sceneName + ".");
+                return;
+            }
+
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
+            {
+                if (TimedOut(LevelTimeout)) Fail("Level scene loaded but both level players were not available.");
+                return;
+            }
+
+            Log("Level loaded: " + sceneName
+                + "; P1=" + DescribeLevelPlayer(p1)
+                + "; P2=" + DescribeLevelPlayer(p2)
+                + "; P2 networkControlled=" + MultiplayerSession.IsNetworkControlledPlayer(PlayerId.PlayerTwo) + ".");
+
+            if (p2.IsDead || p2.stats.Health <= 0)
+            {
+                Fail("Player Two spawned dead: " + DescribeLevelPlayer(p2) + ".");
+                return;
+            }
+
+            CaptureScreen("host_level_" + sceneName);
+            _hasFightStartBossHealth = BossHealthBarOverlay.TryGetPrimaryBossHealth(
+                out _fightStartBossName,
+                out _fightStartBossHealth,
+                out _fightStartBossTotal);
+            Log("Host boss health at fight start: " + BossHealthBarOverlay.GetDebugSummary() + ".");
+            SetStage(Stage.Fight, "Fighting briefly to verify live two-player LAN state.");
+        }
+
+        static void Fight()
+        {
+            KeepScriptedPlayersAlive();
+            HoldHost(CupheadButton.Shoot);
+            CheckRemoteInput();
+
+            if (!_hasFightStartBossHealth && Time.unscaledTime - _stageStartedAt > 1f)
+            {
+                _hasFightStartBossHealth = BossHealthBarOverlay.TryGetPrimaryBossHealth(
+                    out _fightStartBossName,
+                    out _fightStartBossHealth,
+                    out _fightStartBossTotal);
+                if (_hasFightStartBossHealth)
+                    Log("Host boss health after fight startup: " + BossHealthBarOverlay.GetDebugSummary() + ".");
+            }
+
+            if (!TimedOut(FightDuration))
+                return;
+
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            KeepScriptedPlayersAlive(p1, p2);
+            string endBossName;
+            float endBossHealth;
+            float endBossTotal;
+            bool hasEndBossHealth = BossHealthBarOverlay.TryGetPrimaryBossHealth(
+                out endBossName,
+                out endBossHealth,
+                out endBossTotal);
+            Log("Fight smoke complete; P1=" + DescribeLevelPlayer(p1) + "; P2=" + DescribeLevelPlayer(p2)
+                + "; sawRemoteInput=" + _sawRemoteInput
+                + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
+            CaptureScreen("host_fight_end_" + SceneManager.GetActiveScene().name);
+
+            if (p2 == null || p2.stats == null)
+            {
+                Fail("Player Two disappeared during the LAN fight smoke.");
+                return;
+            }
+
+            if (p1 == null || p1.stats == null)
+            {
+                Fail("Player One disappeared during the LAN fight smoke.");
+                return;
+            }
+
+            if (p1.IsDead || p1.stats.Health <= 0)
+            {
+                Fail("Player One became dead during the LAN fight smoke: " + DescribeLevelPlayer(p1) + ".");
+                return;
+            }
+
+            if (p2.IsDead || p2.stats.Health <= 0)
+            {
+                Fail("Player Two became dead during the LAN fight smoke: " + DescribeLevelPlayer(p2) + ".");
+                return;
+            }
+
+            if (!_sawRemoteInput)
+            {
+                Fail("Host did not observe client input frames for Player Two.");
+                return;
+            }
+
+            if (_hasFightStartBossHealth && hasEndBossHealth && endBossName == _fightStartBossName
+             && endBossHealth >= _fightStartBossHealth - 0.5f)
+            {
+                Fail("Boss health did not decrease during the LAN fight smoke: start="
+                    + _fightStartBossHealth.ToString("0.##")
+                    + "/"
+                    + _fightStartBossTotal.ToString("0.##")
+                    + ", end="
+                    + endBossHealth.ToString("0.##")
+                    + "/"
+                    + endBossTotal.ToString("0.##")
+                    + ".");
+                return;
+            }
+
+            ResetScriptedInput();
+            SendHostCheckpointSignal();
+            Time.timeScale = 0f;
+            SetStage(Stage.Done, "PASS.");
+            Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+        }
+
+        static void ClientObserve()
+        {
+            UpdateClientScript();
+            string sceneName = SceneManager.GetActiveScene().name;
+
+            if (Time.unscaledTime - _lastLogAt > 3f)
+            {
+                _lastLogAt = Time.unscaledTime;
+                Log("Client observing scene=" + sceneName + "; connected=" + (Plugin.Net != null && Plugin.Net.IsConnected) + ".");
+            }
+
+            if (!_clientCapturedMap && sceneName.StartsWith("scene_map_world", StringComparison.Ordinal))
+            {
+                _clientCapturedMap = true;
+                Log("Client map sync: " + DescribeClientMapPlayers() + ".");
+                CaptureScreen("client_map_" + sceneName);
+            }
+
+            if (!sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
+                return;
+
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
+                return;
+
+            KeepScriptedPlayersAlive(p1, p2);
+
+            if (!_clientLevelReached)
+            {
+                _clientLevelReached = true;
+                _clientLevelReachedAt = Time.unscaledTime;
+                Log("Client reached level: " + sceneName
+                    + "; P1=" + DescribeLevelPlayer(p1)
+                    + "; P2=" + DescribeLevelPlayer(p2)
+                    + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
+            }
+
+            if (!_clientCapturedLevel)
+            {
+                _clientCapturedLevel = true;
+                CaptureScreen("client_level_" + sceneName);
+            }
+
+            if (p2.IsDead || p2.stats.Health <= 0)
+            {
+                Fail("Client saw Player Two dead in level: " + DescribeLevelPlayer(p2) + ".");
+                return;
+            }
+
+            if (p1.IsDead || p1.stats.Health <= 0)
+            {
+                Fail("Client saw Player One dead in level: " + DescribeLevelPlayer(p1) + ".");
+                return;
+            }
+
+            if (!_remoteCheckpointReceived && Time.unscaledTime - _clientLevelReachedAt < FightDuration)
+                return;
+
+            Log((_remoteCheckpointReceived ? "Client host-checkpoint sync complete" : "Client fight sync complete")
+                + ": P1=" + DescribeLevelPlayer(p1)
+                + "; P2=" + DescribeLevelPlayer(p2)
+                + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
+            if (!_clientCapturedFightEnd)
+            {
+                _clientCapturedFightEnd = true;
+                CaptureScreen("client_fight_end_" + sceneName);
+            }
+
+            Time.timeScale = 0f;
+            SetStage(Stage.Done, "CLIENT PASS.");
+            Plugin.Log.LogInfo("[LanSteamE2E] CLIENT PASS");
+        }
+
+        static void SendHostCheckpointSignal()
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected)
+                return;
+
+            var pkt = new SessionSignalPacket
+            {
+                Signal = (byte)SessionSignalKind.LanSteamE2ECheckpoint,
+                SaveRevision = 0,
+            };
+            Plugin.Net.SendSessionSignal(ref pkt);
+        }
+
+        static void KeepScriptedPlayersAlive()
+        {
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            KeepScriptedPlayersAlive(p1, p2);
+        }
+
+        static void KeepScriptedPlayersAlive(LevelPlayerController p1, LevelPlayerController p2)
+        {
+            RestoreScriptedPlayerHealth(p1);
+            RestoreScriptedPlayerHealth(p2);
+        }
+
+        static void RestoreScriptedPlayerHealth(LevelPlayerController player)
+        {
+            if (player == null || player.stats == null || player.IsDead || player.stats.HealthMax <= 0)
+                return;
+
+            if (player.stats.Health < player.stats.HealthMax)
+                player.stats.SetHealth(player.stats.HealthMax);
+        }
+
+        static void UpdateClientScript()
+        {
+            if (!Plugin.AutoRunLanSteamE2E || !MultiplayerSession.IsClient)
+                return;
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            if (sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
+            {
+                _clientAxis = Vector2.zero;
+                _clientButtons = ButtonMask(CupheadButton.Shoot);
+                _clientDownButtons = 0u;
+                return;
+            }
+
+            float t = Time.unscaledTime;
+            _clientAxis = new Vector2(Mathf.Sin(t * 2.2f) > 0f ? 0.6f : -0.6f, 0f);
+            _clientButtons = 0u;
+            _clientDownButtons = 0u;
+        }
+
+        static void CheckRemoteInput()
+        {
+            InputFramePacket input;
+            if (RemoteInputDriver.TryGetCurrent(PlayerId.PlayerTwo, out input)
+             && (Mathf.Abs(input.AxisX) > 0.05f || Mathf.Abs(input.AxisY) > 0.05f || input.Buttons != 0u))
+            {
+                _sawRemoteInput = true;
+            }
+        }
+
+        static void ForceLoadSelectedMap()
+        {
+            if (_saveSlot < 0)
+            {
+                Fail("Cannot force map load without a selected save slot.");
+                return;
+            }
+
+            var data = PlayerData.GetDataForSlot(_saveSlot);
+            if (data == null)
+            {
+                Fail("Selected save slot " + _saveSlot + " has no PlayerData.");
+                return;
+            }
+
+            Scenes map = data.CurrentMap;
+            if (!Enum.IsDefined(typeof(Scenes), map) || map == Scenes.scene_slot_select)
+                map = Scenes.scene_map_world_1;
+            if (!DLCManager.DLCEnabled() && map == Scenes.scene_map_world_DLC)
+                map = Scenes.scene_map_world_1;
+
+            PlayerData.CurrentSaveFileIndex = _saveSlot;
+            PlayerManager.player1IsMugman = data.isPlayer1Mugman;
+            data.isPlayer1Mugman = PlayerManager.player1IsMugman;
+            PlayerData.inGame = true;
+
+            Log("SlotSelectScreen.EnterGame did not transition; loading selected save map via SceneLoader: " + map + ".");
+            SceneLoader.LoadScene(
+                map,
+                SceneLoader.Transition.Fade,
+                SceneLoader.Transition.Iris,
+                SceneLoader.Icon.Hourglass,
+                null);
+        }
+
+        static void ForceUnityLevelLoad()
+        {
+            string levelScene = LevelProperties.GetLevelScene(_targetLevel);
+            Log("SceneLoader did not transition from the visible start card; forcing Unity scene load for " + _targetLevel + " (" + levelScene + ").");
+            SceneSyncState.ResetTransientSyncState();
+            SceneLoader.SetCurrentLevel(_targetLevel);
+            PlayerData.inGame = true;
+            SceneManager.LoadScene(levelScene);
+        }
+
+        static MapLevelLoader ChooseNearestBossLoader(Vector3 from)
+        {
+            MapLevelLoader[] loaders = UnityEngine.Object.FindObjectsOfType<MapLevelLoader>();
+            MapLevelLoader best = null;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < loaders.Length; i++)
+            {
+                var loader = loaders[i];
+                if (loader == null || !loader.isActiveAndEnabled || !loader.gameObject.activeInHierarchy)
+                    continue;
+
+                Levels level = GetLoaderLevel(loader);
+                if (!IsBossLevel(level))
+                    continue;
+
+                float dist = Vector2.Distance(from, GetInteractionPoint(loader));
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = loader;
+                }
+            }
+            return best;
+        }
+
+        static MapLevelLoader ChooseConfiguredBossLoader(Vector3 from)
+        {
+            string configured = Plugin.AutoRunLanSteamE2ETarget;
+            if (string.IsNullOrEmpty(configured) || string.Equals(configured, "Nearest", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            Levels targetLevel;
+            try
+            {
+                targetLevel = (Levels)Enum.Parse(typeof(Levels), configured, true);
+            }
+            catch
+            {
+                Fail("Configured LAN E2E target '" + configured + "' is not a valid Levels enum name.");
+                return null;
+            }
+
+            if (!IsBossLevel(targetLevel))
+            {
+                Fail("Configured LAN E2E target '" + configured + "' is not a boss level.");
+                return null;
+            }
+
+            MapLevelLoader[] loaders = UnityEngine.Object.FindObjectsOfType<MapLevelLoader>();
+            MapLevelLoader best = null;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < loaders.Length; i++)
+            {
+                var loader = loaders[i];
+                if (loader == null || !loader.isActiveAndEnabled || !loader.gameObject.activeInHierarchy)
+                    continue;
+
+                if (GetLoaderLevel(loader) != targetLevel)
+                    continue;
+
+                float dist = Vector2.Distance(from, GetInteractionPoint(loader));
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = loader;
+                }
+            }
+
+            if (best == null)
+                Fail("Configured LAN E2E target '" + targetLevel + "' was not found on the current map.");
+            else
+                Log("Configured LAN E2E target selected: " + targetLevel + " (distance " + bestDist.ToString("0.00") + ").");
+
+            return best;
+        }
+
+        static bool IsBossLevel(Levels level)
+        {
+            return level != Levels.Tutorial
+                && level != Levels.ShmupTutorial
+                && level != Levels.House
+                && level != Levels.Mausoleum
+                && level != Levels.DiceGate
+                && level != Levels.ChaliceTutorial;
+        }
+
+        static Levels GetLoaderLevel(MapLevelLoader loader)
+        {
+            if (loader == null || LevelField == null)
+                return Levels.Test;
+
+            object raw = LevelField.GetValue(loader);
+            return raw is Levels ? (Levels)raw : Levels.Test;
+        }
+
+        static Vector2 GetInteractionPoint(MapLevelLoader loader)
+        {
+            return (Vector2)loader.transform.position + loader.interactionPoint;
+        }
+
+        static void ActivateTargetLoader(MapPlayerController player)
+        {
+            if (_targetLoader == null || player == null || MapLevelLoaderActivateMethod == null)
+            {
+                PressHost(CupheadButton.Accept);
+                return;
+            }
+
+            MapLevelLoaderActivateMethod.Invoke(_targetLoader, new object[] { player });
+        }
+
+        static bool IsAnyStartUiActive()
+        {
+            return (MapDifficultySelectStartUI.Current != null && MapDifficultySelectStartUI.Current.CurrentState == AbstractMapSceneStartUI.State.Active)
+                || (MapConfirmStartUI.Current != null && MapConfirmStartUI.Current.CurrentState == AbstractMapSceneStartUI.State.Active)
+                || (MapBasicStartUI.Current != null && MapBasicStartUI.Current.CurrentState == AbstractMapSceneStartUI.State.Active);
+        }
+
+        static void PressHost(CupheadButton button)
+        {
+            uint mask = ButtonMask(button);
+            _hostButtons |= mask;
+            _hostDownButtons |= mask;
+            _hostDownUntilFrame = Math.Max(_hostDownUntilFrame, Time.frameCount + 4);
+        }
+
+        static void HoldHost(CupheadButton button)
+        {
+            _hostButtons |= ButtonMask(button);
+        }
+
+        static uint ButtonMask(CupheadButton button)
+        {
+            int index = (int)button;
+            if (index < 0 || index >= 32)
+                return 0u;
+            return 1u << index;
+        }
+
+        static void ClearExpiredDownButtons()
+        {
+            if (_hostDownButtons != 0u && Time.frameCount > _hostDownUntilFrame)
+            {
+                _hostDownButtons = 0u;
+                _hostButtons &= ~ButtonMask(CupheadButton.Accept);
+            }
+
+            if (_clientDownButtons != 0u && Time.frameCount > _clientDownUntilFrame)
+            {
+                _clientDownButtons = 0u;
+                _clientButtons &= ~ButtonMask(CupheadButton.Accept);
+            }
+        }
+
+        static void ResetScriptedInput()
+        {
+            _hostAxis = Vector2.zero;
+            _hostButtons = 0u;
+            _hostDownButtons = 0u;
+            _hostDownUntilFrame = 0;
+            _clientAxis = Vector2.zero;
+            _clientButtons = 0u;
+            _clientDownButtons = 0u;
+            _clientDownUntilFrame = 0;
+        }
+
+        static bool TimedOut(float seconds)
+        {
+            return Time.unscaledTime - _stageStartedAt > seconds;
+        }
+
+        static void SetStage(Stage stage, string message)
+        {
+            _stage = stage;
+            _stageStartedAt = Time.unscaledTime;
+            _lastLogAt = -100f;
+            if (stage == Stage.LoadSlotSelect)
+            {
+                _fallbackMapLoadTried = false;
+                _fallbackUnityLevelLoadTried = false;
+                _sawRemoteInput = false;
+                _clientCapturedMap = false;
+                _clientCapturedLevel = false;
+                _clientCapturedFightEnd = false;
+                _clientLevelReached = false;
+                _remoteCheckpointReceived = false;
+                _clientLevelReachedAt = 0f;
+                _hasFightStartBossHealth = false;
+                _fightStartBossName = string.Empty;
+                _fightStartBossHealth = 0f;
+                _fightStartBossTotal = 0f;
+            }
+            ResetScriptedInput();
+            Log(message);
+        }
+
+        static void Fail(string message)
+        {
+            ResetScriptedInput();
+            _stage = Stage.Failed;
+            Plugin.Log.LogError("[LanSteamE2E] FAIL: " + message);
+        }
+
+        static void Log(string message)
+        {
+            Plugin.Log.LogInfo("[LanSteamE2E] " + message);
+        }
+
+        static void CaptureScreen(string label)
+        {
+            try
+            {
+                string gameRoot = Path.GetDirectoryName(Application.dataPath);
+                string dir = Path.Combine(Path.Combine(Path.Combine(gameRoot, "BepInEx"), "CupHeads"), "LanSteamE2E");
+                Directory.CreateDirectory(dir);
+                string role = MultiplayerSession.IsHost ? "host" : MultiplayerSession.IsClient ? "client" : "offline";
+                string file = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff")
+                    + "_"
+                    + role
+                    + "_"
+                    + SanitizeFilePart(label)
+                    + ".png";
+                string path = Path.Combine(dir, file);
+                var capture = typeof(Application).GetMethod(
+                    "CaptureScreenshot",
+                    BindingFlags.Static | BindingFlags.Public,
+                    null,
+                    new[] { typeof(string) },
+                    null);
+                if (capture == null)
+                {
+                    Plugin.Log.LogWarning("[LanSteamE2E] Could not capture screenshot: Unity capture API unavailable.");
+                    return;
+                }
+
+                capture.Invoke(null, new object[] { path });
+                Log("Screenshot queued: " + path);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[LanSteamE2E] Could not capture screenshot: " + ex.Message);
+            }
+        }
+
+        static string SanitizeFilePart(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "screen";
+
+            char[] chars = value.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                char c = chars[i];
+                if (!char.IsLetterOrDigit(c) && c != '_' && c != '-')
+                    chars[i] = '_';
+            }
+            return new string(chars);
+        }
+
+        static string DescribeClientMapPlayers()
+        {
+            if (Map.Current == null || Map.Current.players == null || Map.Current.players.Length < 2)
+                return "map players unavailable";
+
+            return "P1=" + DescribeMapPlayer(Map.Current.players[0])
+                + "; P2=" + DescribeMapPlayer(Map.Current.players[1]);
+        }
+
+        static string DescribeMapPlayer(MapPlayerController player)
+        {
+            if (player == null)
+                return "missing";
+            Vector3 pos = player.transform.position;
+            return player.id + " state=" + player.state + " pos=(" + pos.x.ToString("0.00") + "," + pos.y.ToString("0.00") + ")";
+        }
+
+        static string DescribeLevelPlayer(LevelPlayerController player)
+        {
+            if (player == null)
+                return "missing";
+            Vector3 pos = player.transform.position;
+            string health = player.stats == null ? "no-stats" : player.stats.Health + "/" + player.stats.HealthMax;
+            return player.id + " dead=" + player.IsDead + " hp=" + health + " pos=(" + pos.x.ToString("0.00") + "," + pos.y.ToString("0.00") + ")";
+        }
+    }
+}

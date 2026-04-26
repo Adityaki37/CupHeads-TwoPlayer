@@ -83,6 +83,11 @@ namespace CupheadOnline.Patches
 
             if (!MultiplayerSession.IsActive) return true;
 
+            if (MultiplayerSession.IsHost)
+                LevelStartSync.BeginHostLevelLoad(level);
+            else
+                LevelStartSync.BeginClientLevelLoad(level);
+
             SceneSyncState.ResetTransientSyncState();
 
             if (!MultiplayerSession.IsHost) return true;

@@ -44,3 +44,7 @@ CupheadOnlineInstaller
 *.pdb
 *.cache
 *.zip
+
+# Local verification artifacts
+visual-test/
+tools/ffmpeg/

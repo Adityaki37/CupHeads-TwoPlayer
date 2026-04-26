@@ -94,6 +94,10 @@ namespace CupheadOnline.Patches
 
         internal static PlayerStatePacket BuildStatePacket(LevelPlayerController player, LevelPlayerMotor motor)
         {
+            int animHash;
+            float animTime;
+            GetAnimState(player, out animHash, out animTime);
+
             return new PlayerStatePacket
             {
                 PlayerId = (byte)player.id,
@@ -102,18 +106,33 @@ namespace CupheadOnline.Patches
                 LookX = (sbyte)motor.LookDirection.x.Value,
                 LookY = (sbyte)motor.LookDirection.y.Value,
                 Flags = BuildFlags(player, motor),
-                AnimState = GetAnimHash(player),
+                AnimState = (byte)(animHash & 0xFF),
                 Tick = MultiplayerSession.Tick,
+                AnimHash = animHash,
+                AnimNormalizedTime = animTime,
             };
         }
 
         internal static byte GetAnimHash(LevelPlayerController player)
         {
+            int animHash;
+            float animTime;
+            GetAnimState(player, out animHash, out animTime);
+            return (byte)(animHash & 0xFF);
+        }
+
+        static void GetAnimState(LevelPlayerController player, out int animHash, out float normalizedTime)
+        {
+            animHash = 0;
+            normalizedTime = 0f;
+
             var anim = player.animationController?.animator;
             if (anim == null)
-                return 0;
+                return;
 
-            return (byte)(anim.GetCurrentAnimatorStateInfo(0).fullPathHash & 0xFF);
+            var state = anim.GetCurrentAnimatorStateInfo(0);
+            animHash = state.fullPathHash;
+            normalizedTime = Mathf.Repeat(state.normalizedTime, 1f);
         }
 
         static void SendInputFrameAndState(LevelPlayerMotor motor, LevelPlayerController player, ref PlayerStatePacket statePkt)
@@ -129,10 +148,17 @@ namespace CupheadOnline.Patches
 
             var s = snapshot.Value;
             var target = new Vector3(s.PosX, s.PosY, motor.transform.position.z);
-            motor.transform.position = Vector3.Lerp(
-                motor.transform.position,
-                target,
-                Mathf.Min(1f, 20f * Time.fixedDeltaTime));
+            if (Plugin.VanillaTwoPlayerOnline && participantId <= (byte)PlayerId.PlayerTwo)
+            {
+                motor.transform.position = target;
+            }
+            else
+            {
+                motor.transform.position = Vector3.Lerp(
+                    motor.transform.position,
+                    target,
+                    Mathf.Min(1f, 20f * Time.fixedDeltaTime));
+            }
 
             var t = Traverse.Create(motor);
             t.Property("LookDirection").SetValue(new Trilean2(s.LookX, s.LookY));
@@ -144,10 +170,12 @@ namespace CupheadOnline.Patches
                 t.Property("MoveDirection").SetValue(new Trilean2(
                     input.AxisX > 0.38f ? 1 : input.AxisX < -0.38f ? -1 : 0,
                     input.AxisY > 0.38f ? 1 : input.AxisY < -0.38f ? -1 : 0));
+                ApplyRemoteShootingFlag(motor.player, input.IsPressed(CupheadButton.Shoot));
             }
             else
             {
                 t.Property("MoveDirection").SetValue(new Trilean2(0, 0));
+                ApplyRemoteShootingFlag(motor.player, false);
             }
 
             t.Property("Grounded").SetValue(s.Grounded);
@@ -159,6 +187,7 @@ namespace CupheadOnline.Patches
             t.Property("IsUsingSuperOrEx").SetValue(s.IsSuper);
 
             RemotePlayer.UpdateStateTransitions(participantId, motor, s);
+            ApplyRemoteAnimation(motor.player, s);
         }
 
         static void ApplyAuthoritativeCorrection(LevelPlayerMotor motor, PlayerId playerId)
@@ -171,9 +200,10 @@ namespace CupheadOnline.Patches
 
             var target = new Vector3(snapshot.PosX, snapshot.PosY, motor.transform.position.z);
             float distance = Vector2.Distance(motor.transform.position, target);
-            float deadZone = Plugin.LatencyFriendlyDamage ? 0.85f : 0.35f;
-            float snapDistance = Plugin.LatencyFriendlyDamage ? 8f : 4f;
-            float blend = Plugin.LatencyFriendlyDamage ? 0.08f : 0.18f;
+            bool tightBuiltInSync = Plugin.VanillaTwoPlayerOnline && playerId <= PlayerId.PlayerTwo;
+            float deadZone = tightBuiltInSync ? 0.08f : Plugin.LatencyFriendlyDamage ? 0.85f : 0.35f;
+            float snapDistance = tightBuiltInSync ? 1.25f : Plugin.LatencyFriendlyDamage ? 8f : 4f;
+            float blend = tightBuiltInSync ? 0.65f : Plugin.LatencyFriendlyDamage ? 0.08f : 0.18f;
 
             if (distance < deadZone)
                 return;
@@ -181,6 +211,33 @@ namespace CupheadOnline.Patches
             motor.transform.position = distance > snapDistance
                 ? target
                 : Vector3.Lerp(motor.transform.position, target, blend);
+        }
+
+        static void ApplyRemoteShootingFlag(LevelPlayerController player, bool shooting)
+        {
+            var anim = player?.animationController?.animator;
+            if (anim == null)
+                return;
+
+            anim.SetBool("Shooting", shooting);
+        }
+
+        static void ApplyRemoteAnimation(LevelPlayerController player, PlayerStatePacket snapshot)
+        {
+            if (!Plugin.VanillaTwoPlayerOnline || snapshot.PlayerId > (byte)PlayerId.PlayerTwo)
+                return;
+
+            var anim = player?.animationController?.animator;
+            if (anim == null || snapshot.AnimHash == 0)
+                return;
+
+            var local = anim.GetCurrentAnimatorStateInfo(0);
+            float localTime = Mathf.Repeat(local.normalizedTime, 1f);
+            float remoteTime = Mathf.Repeat(snapshot.AnimNormalizedTime, 1f);
+            float wrappedDelta = Mathf.Abs(Mathf.Repeat(localTime - remoteTime + 0.5f, 1f) - 0.5f);
+
+            if (local.fullPathHash != snapshot.AnimHash || wrappedDelta > 0.22f)
+                anim.Play(snapshot.AnimHash, 0, remoteTime);
         }
     }
 

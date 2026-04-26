@@ -191,6 +191,9 @@ namespace CupheadOnline.Patches
 
         internal static bool TryGetLocalButton(PlayerId playerId, int actionId, bool down, bool up, out bool value)
         {
+            if (LanSteamE2ETest.TryGetLocalButton(playerId, actionId, down, up, out value))
+                return true;
+
             if (playerId == PlayerId.None)
                 return TryGetLocalButton(actionId, down, up, out value);
 
@@ -208,6 +211,9 @@ namespace CupheadOnline.Patches
 
         internal static bool TryGetLocalAxis(PlayerId playerId, int actionId, out float value)
         {
+            if (LanSteamE2ETest.TryGetLocalAxis(playerId, actionId, out value))
+                return true;
+
             if (playerId == PlayerId.None)
                 return TryGetLocalAxis(actionId, out value);
 
@@ -305,6 +311,12 @@ namespace CupheadOnline.Patches
                 return;
             }
 
+            if (LanSteamE2ETest.TryGetLocalAxis(owner, actionId, out value))
+            {
+                __result = value;
+                return;
+            }
+
             if (MultiplayerSession.IsNetworkControlledPlayer(owner))
             {
                 if (UniversalInputRouter.TryGetRemoteAxis(owner, actionId, out value))
@@ -346,6 +358,12 @@ namespace CupheadOnline.Patches
 
             bool value;
             if (LocalDevE2ETest.TryGetLocalButton(owner, actionId, down, up, out value))
+            {
+                result = value;
+                return;
+            }
+
+            if (LanSteamE2ETest.TryGetLocalButton(owner, actionId, down, up, out value))
             {
                 result = value;
                 return;

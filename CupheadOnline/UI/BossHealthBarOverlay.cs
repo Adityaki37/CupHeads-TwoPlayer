@@ -131,6 +131,44 @@ namespace CupheadOnline.UI
                 Instance._nextScanAt = 0f;
         }
 
+        public static bool TryGetPrimaryBossHealth(out string name, out float current, out float total)
+        {
+            name = string.Empty;
+            current = 0f;
+            total = 0f;
+
+            ScratchSnapshots.Clear();
+            ScanBosses(ScratchSnapshots);
+            if (ScratchSnapshots.Count == 0)
+                return false;
+
+            var snapshot = ScratchSnapshots[0];
+            name = snapshot.Name;
+            current = snapshot.Current;
+            total = snapshot.Total;
+            return true;
+        }
+
+        public static string GetDebugSummary()
+        {
+            ScratchSnapshots.Clear();
+            ScanBosses(ScratchSnapshots);
+            if (ScratchSnapshots.Count == 0)
+                return "none";
+
+            var parts = new string[Mathf.Min(ScratchSnapshots.Count, MaxBars)];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                var snapshot = ScratchSnapshots[i];
+                parts[i] = snapshot.Name
+                    + " "
+                    + Mathf.CeilToInt(Mathf.Max(0f, snapshot.Current))
+                    + "/"
+                    + Mathf.CeilToInt(Mathf.Max(1f, snapshot.Total));
+            }
+            return string.Join(", ", parts);
+        }
+
         public static void Hide()
         {
             if (Instance == null)
@@ -591,7 +629,11 @@ namespace CupheadOnline.UI
             if (string.IsNullOrEmpty(candidate) || candidate == "GameObject")
                 candidate = propertyType.Name;
 
-            return CleanName(candidate);
+            string cleaned = CleanName(candidate);
+            if (IsGenericBossDisplayName(cleaned))
+                return CurrentLevelDisplayName(cleaned);
+
+            return cleaned;
         }
 
         private static string CleanName(string value)
@@ -611,6 +653,59 @@ namespace CupheadOnline.UI
                 text = text.Substring(0, 31) + "...";
 
             return text.ToUpperInvariant();
+        }
+
+        private static string CurrentLevelDisplayName(string fallback)
+        {
+            try
+            {
+                if (Level.Current != null)
+                {
+                    string levelName = CleanLevelName(Level.Current.CurrentLevel.ToString(), fallback);
+                    if (!IsGenericBossDisplayName(levelName))
+                        return levelName;
+                }
+            }
+            catch
+            {
+            }
+
+            return fallback;
+        }
+
+        private static string CleanLevelName(string value, string fallback)
+        {
+            if (string.IsNullOrEmpty(value))
+                return fallback;
+
+            string text = value.Replace("level_", string.Empty)
+                .Replace("scene_", string.Empty)
+                .Replace("_", " ")
+                .Trim();
+
+            while (text.Contains("  "))
+                text = text.Replace("  ", " ");
+
+            if (string.IsNullOrEmpty(text))
+                return fallback;
+
+            if (text.Length > 34)
+                text = text.Substring(0, 31) + "...";
+
+            return text.ToUpperInvariant();
+        }
+
+        private static bool IsGenericBossDisplayName(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return true;
+
+            string text = value.Trim().ToUpperInvariant();
+            return text == "BOSS"
+                || text == "LEVEL"
+                || text == "GAMEOBJECT"
+                || text == "PROPERTIES"
+                || text == "PROPERTY";
         }
 
         private static bool IsBossLike(string value)

@@ -127,8 +127,15 @@ namespace CupheadOnline.Sync
         {
             var state = GetOrCreateState(participantId);
 
-            while (state.Buffer.Count > TargetBuffer + 2 && state.Buffer.Count > 1)
+            int targetBuffer = GetTargetBuffer(participantId);
+            while (state.Buffer.Count > targetBuffer + 2 && state.Buffer.Count > 1)
                 state.Last = state.Buffer.Dequeue();
+
+            if (targetBuffer == 0)
+            {
+                while (state.Buffer.Count > 1)
+                    state.Last = state.Buffer.Dequeue();
+            }
 
             int attempts = state.Buffer.Count;
             while (attempts-- > 0 && state.Buffer.Count > 0)
@@ -223,6 +230,14 @@ namespace CupheadOnline.Sync
                 _slotStates[participantId] = state;
             }
             return state;
+        }
+
+        static int GetTargetBuffer(byte participantId)
+        {
+            if (Plugin.VanillaTwoPlayerOnline && participantId <= (byte)PlayerId.PlayerTwo)
+                return 0;
+
+            return TargetBuffer;
         }
 
         static void StoreLocalAuthoritySnapshot(PlayerStatePacket pkt)

@@ -112,10 +112,10 @@ namespace CupheadOnline.Sync
             pkt = new LobbySyncPacket
             {
                 PlayerId  = (byte)MultiplayerSession.LocalId,
-                Weapon1   = (byte)loadout.primaryWeapon,
-                Weapon2   = (byte)loadout.secondaryWeapon,
-                Super     = (byte)loadout.super,
-                Charm     = (byte)loadout.charm,
+                Weapon1   = (int)loadout.primaryWeapon,
+                Weapon2   = (int)loadout.secondaryWeapon,
+                Super     = (int)loadout.super,
+                Charm     = (int)loadout.charm,
                 IsChalice = (byte)(isChalice ? 1 : 0),
             };
             return true;

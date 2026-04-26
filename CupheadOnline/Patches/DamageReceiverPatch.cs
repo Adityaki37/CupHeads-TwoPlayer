@@ -4,6 +4,24 @@ using CupheadOnline.Sync;
 
 namespace CupheadOnline.Patches
 {
+    [HarmonyPatch(typeof(DamageReceiver), nameof(DamageReceiver.TakeDamage))]
+    public static class EnemyDamageHostAuthorityPatch
+    {
+        static bool Prefix(DamageReceiver __instance)
+        {
+            return DamageReceiverAuthority.ShouldAllowLocalDamage(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(DamageReceiver), nameof(DamageReceiver.TakeDamageBruteForce))]
+    public static class EnemyBruteForceDamageHostAuthorityPatch
+    {
+        static bool Prefix(DamageReceiver __instance)
+        {
+            return DamageReceiverAuthority.ShouldAllowLocalDamage(__instance);
+        }
+    }
+
     /// <summary>
     /// Hybrid co-op damage.
     ///
@@ -102,6 +120,19 @@ namespace CupheadOnline.Patches
                 };
                 Plugin.Net.SendDamageEvent(ref pkt);
             }
+        }
+    }
+
+    static class DamageReceiverAuthority
+    {
+        internal static bool ShouldAllowLocalDamage(DamageReceiver receiver)
+        {
+            if (!MultiplayerSession.IsActive || LocalDevSession.IsActive)
+                return true;
+            if (receiver == null || receiver.type != DamageReceiver.Type.Enemy)
+                return true;
+
+            return MultiplayerSession.IsHost;
         }
     }
 }

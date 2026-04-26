@@ -40,6 +40,9 @@ namespace CupheadOnline.Net
         GuestReady = 1,
         GuestUnready = 2,
         RequestRecovery = 3,
+        LanSteamE2ECheckpoint = 4,
+        LevelLoaded = 5,
+        LevelStartRelease = 6,
     }
 
     public struct PlayerStatePacket : IPacket
@@ -54,6 +57,8 @@ namespace CupheadOnline.Net
         public byte Flags;
         public byte AnimState;
         public uint Tick;
+        public int AnimHash;
+        public float AnimNormalizedTime;
 
         public bool Grounded => (Flags & 1) != 0;
         public bool Dashing => (Flags & 2) != 0;
@@ -74,6 +79,8 @@ namespace CupheadOnline.Net
             w.Write(Flags);
             w.Write(AnimState);
             w.Write(Tick);
+            w.Write(AnimHash);
+            w.Write(AnimNormalizedTime);
         }
 
         public void Read(BinaryReader r)
@@ -86,6 +93,12 @@ namespace CupheadOnline.Net
             Flags = r.ReadByte();
             AnimState = r.ReadByte();
             Tick = r.ReadUInt32();
+            AnimHash = AnimState;
+            AnimNormalizedTime = 0f;
+            if (r.BaseStream.Position <= r.BaseStream.Length - 4)
+                AnimHash = r.ReadInt32();
+            if (r.BaseStream.Position <= r.BaseStream.Length - 4)
+                AnimNormalizedTime = r.ReadSingle();
         }
     }
 
@@ -181,6 +194,9 @@ namespace CupheadOnline.Net
         public byte Phase;
         public int AnimHash;
         public uint Tick;
+        public float BossHp;
+        public float BossTotalHp;
+        public float AnimNormalizedTime;
 
         public void Write(BinaryWriter w)
         {
@@ -191,6 +207,9 @@ namespace CupheadOnline.Net
             w.Write(Phase);
             w.Write(AnimHash);
             w.Write(Tick);
+            w.Write(BossHp);
+            w.Write(BossTotalHp);
+            w.Write(AnimNormalizedTime);
         }
 
         public void Read(BinaryReader r)
@@ -202,6 +221,16 @@ namespace CupheadOnline.Net
             Phase = r.ReadByte();
             AnimHash = r.ReadInt32();
             Tick = r.ReadUInt32();
+            BossHp = -1f;
+            BossTotalHp = -1f;
+            AnimNormalizedTime = 0f;
+            if (r.BaseStream.Position <= r.BaseStream.Length - 8)
+            {
+                BossHp = r.ReadSingle();
+                BossTotalHp = r.ReadSingle();
+            }
+            if (r.BaseStream.Position <= r.BaseStream.Length - 4)
+                AnimNormalizedTime = r.ReadSingle();
         }
     }
 
@@ -226,10 +255,10 @@ namespace CupheadOnline.Net
     public struct LobbySyncPacket : IPacket
     {
         public byte PlayerId;
-        public byte Weapon1;
-        public byte Weapon2;
-        public byte Super;
-        public byte Charm;
+        public int Weapon1;
+        public int Weapon2;
+        public int Super;
+        public int Charm;
         public byte IsChalice;
 
         public void Write(BinaryWriter w)
@@ -245,10 +274,10 @@ namespace CupheadOnline.Net
         public void Read(BinaryReader r)
         {
             PlayerId = r.ReadByte();
-            Weapon1 = r.ReadByte();
-            Weapon2 = r.ReadByte();
-            Super = r.ReadByte();
-            Charm = r.ReadByte();
+            Weapon1 = r.ReadInt32();
+            Weapon2 = r.ReadInt32();
+            Super = r.ReadInt32();
+            Charm = r.ReadInt32();
             IsChalice = r.ReadByte();
         }
     }
@@ -345,10 +374,10 @@ namespace CupheadOnline.Net
         public float CompletionPct;
         public float CompletionPctDlc;
         public ushort Coins;
-        public byte Weapon1;
-        public byte Weapon2;
-        public byte Super;
-        public byte Charm;
+        public int Weapon1;
+        public int Weapon2;
+        public int Super;
+        public int Charm;
 
         public bool IsEmpty => (Flags & 1) != 0;
         public bool DlcEnabled => (Flags & 2) != 0;
@@ -376,10 +405,10 @@ namespace CupheadOnline.Net
             CompletionPct = r.ReadSingle();
             CompletionPctDlc = r.ReadSingle();
             Coins = r.ReadUInt16();
-            Weapon1 = r.ReadByte();
-            Weapon2 = r.ReadByte();
-            Super = r.ReadByte();
-            Charm = r.ReadByte();
+            Weapon1 = r.ReadInt32();
+            Weapon2 = r.ReadInt32();
+            Super = r.ReadInt32();
+            Charm = r.ReadInt32();
         }
     }
 

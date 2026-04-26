@@ -85,7 +85,7 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(PlayerStatsManager), "LevelInit")]
     public static class StatsLevelInitPatch
     {
-        static void Prefix(PlayerStatsManager __instance)
+        static void Postfix(PlayerStatsManager __instance)
         {
             if (!MultiplayerSession.IsActive) return;
             var player = __instance.GetComponent<AbstractPlayerController>();
@@ -102,6 +102,15 @@ namespace CupheadOnline.Patches
         static void Prefix()
         {
             MultiplayerSession.EnsureCupheadMultiplayerState();
+        }
+    }
+
+    [HarmonyPatch(typeof(Level), "OnTransitionInComplete")]
+    public static class LevelTransitionInCompletePatch
+    {
+        static void Postfix(Level __instance)
+        {
+            LevelStartSync.NotifyLocalTransitionInComplete(__instance);
         }
     }
 }

@@ -255,6 +255,9 @@ namespace CupheadOnline.Sync
 
         public static void ApplySessionSignal(SessionSignalPacket pkt)
         {
+            if (LanSteamE2ETest.TryHandleSessionSignal(pkt))
+                return;
+
             switch (pkt.Kind)
             {
                 case SessionSignalKind.GuestReady:
@@ -276,6 +279,14 @@ namespace CupheadOnline.Sync
                     if (!MultiplayerSession.IsHost) return;
                     _recoveryRequestCount++;
                     BroadcastRecoveryBundle("Guest requested a resync.");
+                    break;
+
+                case SessionSignalKind.LevelLoaded:
+                    LevelStartSync.HandleRemoteLevelLoaded(pkt.SaveRevision);
+                    break;
+
+                case SessionSignalKind.LevelStartRelease:
+                    LevelStartSync.HandleRemoteLevelStartRelease(pkt.SaveRevision);
                     break;
             }
         }
@@ -681,10 +692,10 @@ namespace CupheadOnline.Sync
             if (DLCManager.DLCEnabled()) flags |= 2;
             if (data != null && data.isPlayer1Mugman) flags |= 4;
 
-            byte weapon1 = 0;
-            byte weapon2 = 0;
-            byte super = 0;
-            byte charm = 0;
+            int weapon1 = (int)Weapon.level_weapon_peashot;
+            int weapon2 = (int)Weapon.None;
+            int super = (int)Super.None;
+            int charm = (int)Charm.None;
             float baseCompletion = 0f;
             float dlcCompletion = 0f;
             ushort coins = 0;
@@ -699,10 +710,10 @@ namespace CupheadOnline.Sync
                 if (loadouts != null)
                 {
                     var loadout = loadouts.GetPlayerLoadout(PlayerId.PlayerOne);
-                    weapon1 = (byte)loadout.primaryWeapon;
-                    weapon2 = (byte)loadout.secondaryWeapon;
-                    super = (byte)loadout.super;
-                    charm = (byte)loadout.charm;
+                    weapon1 = (int)loadout.primaryWeapon;
+                    weapon2 = (int)loadout.secondaryWeapon;
+                    super = (int)loadout.super;
+                    charm = (int)loadout.charm;
                 }
             }
 
@@ -949,6 +960,7 @@ namespace CupheadOnline.Sync
                 _lastAutoFollowAt = Time.unscaledTime;
                 ConnectionHUD.Show("Following host into level...");
                 Plugin.Log.LogInfo("[Session] Auto-following host level " + ((Levels)snapshot.CurrentLevel) + ".");
+                LevelStartSync.BeginClientLevelLoad((Levels)snapshot.CurrentLevel);
                 SceneSyncState.AllowNextClientLevelLoad();
                 SceneLoader.LoadLevel((Levels)snapshot.CurrentLevel, SceneLoader.Transition.Iris);
                 return;

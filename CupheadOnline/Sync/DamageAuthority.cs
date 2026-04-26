@@ -49,6 +49,18 @@ namespace CupheadOnline.Sync
             if (Level.Current == null)
                 return;
 
+            if (pkt.TargetPlayerId <= (byte)PlayerId.PlayerTwo
+             && !MultiplayerSession.IsAuthoritativePlayer((PlayerId)pkt.TargetPlayerId))
+            {
+                ParticipantStatusTracker.ParticipantStatus status;
+                if (ParticipantStatusTracker.TryGetStored(pkt.TargetPlayerId, out status)
+                 && status.IsKnown
+                 && !NetTick.IsNewer(pkt.Tick, status.Tick))
+                {
+                    return;
+                }
+            }
+
             uint previousTick;
             if (_lastAppliedTicks.TryGetValue(pkt.TargetPlayerId, out previousTick)
              && NetTick.IsOlder(pkt.Tick, previousTick))
