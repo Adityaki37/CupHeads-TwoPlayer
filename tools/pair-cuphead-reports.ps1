@@ -69,6 +69,8 @@ function New-ReportInfo([string]$Dir) {
         Dir = $Dir
         Role = $role
         PairingKey = $key
+        ExportMode = Get-Field $combined "Export Mode"
+        ExportReason = Get-Field $combined "Export Reason"
         GeneratedLocal = Get-Field $combined "Generated Local"
         GeneratedUtc = Get-Field $combined "Generated UTC"
         Version = Get-Field $diagnostics "Version"
@@ -157,6 +159,12 @@ $summary.Add("| Side | Role | Pairing Key | Version | State | Lobby | Peer |")
 $summary.Add("| --- | --- | --- | --- | --- | --- | --- |")
 $summary.Add("| A | $($infoA.Role) | $($infoA.PairingKey) | $($infoA.Version) | $($infoA.State) | $($infoA.LobbyId) | $($infoA.Peer) |")
 $summary.Add("| B | $($infoB.Role) | $($infoB.PairingKey) | $($infoB.Version) | $($infoB.State) | $($infoB.LobbyId) | $($infoB.Peer) |")
+$summary.Add("")
+$summary.Add("## Export Info")
+$summary.Add("")
+$summary.Add("A: $($infoA.ExportMode) - $($infoA.ExportReason)")
+$summary.Add("")
+$summary.Add("B: $($infoB.ExportMode) - $($infoB.ExportReason)")
 $summary.Add("")
 $summary.Add("## Last Status")
 $summary.Add("")

@@ -181,7 +181,9 @@ Two-window testing note:
 
 ## Paired Bug Reports
 
-Both players can export matching reports from the multiplayer lobby with `EXPORT BUG REPORT` after a shared run. Each exported folder contains `pairing.txt`, `diagnostics.txt`, and `LogOutput.log`; reports from the same lobby share the same `Pairing Key`.
+CupHeads automatically creates a local paired report after a connected multiplayer session disconnects, errors, or is shut down. The manual `EXPORT BUG REPORT` action still exists if you want to capture the current state on demand.
+
+Each exported folder contains `pairing.txt`, `diagnostics.txt`, and `LogOutput.log`; reports from the same lobby share the same `Pairing Key`. Automatic reports are stored under `BepInEx/CupHeads/Reports` with names that start with `auto-report-`.
 
 To merge both sides locally:
 

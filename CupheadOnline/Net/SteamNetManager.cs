@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Threading;
 using Steamworks;
 using UnityEngine;
+using CupheadOnline.Diagnostics;
 using CupheadOnline.Sync;
 using CupheadOnline.UI;
 
@@ -534,6 +535,7 @@ namespace CupheadOnline.Net
         string   _steamUnavailableStatus = "Steam is unavailable.\nLaunch Cuphead through Steam.";
         string   _lastStatusMessage;
         string   _lastFailureReason;
+        bool     _autoReportSessionArmed;
         bool     _localLoopbackTestActive;
         CSteamID _localLoopbackPeerId = new CSteamID(76561198000000001UL);
         readonly Dictionary<ulong, HostPeerInfo> _hostPeers = new Dictionary<ulong, HostPeerInfo>();
@@ -1893,6 +1895,14 @@ namespace CupheadOnline.Net
                          || _peerId != CSteamID.Nil
                          || _lobbyId != CSteamID.Nil
                          || _lanActive;
+            bool wasConnected = _state == NetState.Connected;
+
+            if (_autoReportSessionArmed && wasConnected)
+            {
+                _lastStatusMessage = "Session shut down locally.";
+                _lastFailureReason = "Session shut down locally.";
+                TryAutoExportAndDisarm("Session shut down locally.");
+            }
 
             if (_lanActive && _peerId != CSteamID.Nil)
             {
@@ -1927,6 +1937,7 @@ namespace CupheadOnline.Net
             _lanActive       = false;
             Latency          = 0;
             _state           = NetState.Idle;
+            _autoReportSessionArmed = false;
             _hostPeers.Clear();
             _peerSessionParticipantIds.Clear();
             _nextSessionParticipantId = 2;
@@ -2576,9 +2587,34 @@ namespace CupheadOnline.Net
             FireStatus(status);
             Plugin.Log.LogInfo("[SteamNet] → " + s + ": " + status);
             LogPairEvent("state", s + " | " + status);
+            UpdateAutoReportState(s, status);
         }
 
         void FireStatus(string msg) => OnStatusChanged?.Invoke(msg);
+
+        void UpdateAutoReportState(NetState s, string status)
+        {
+            if (s == NetState.Connected)
+            {
+                _autoReportSessionArmed = true;
+                return;
+            }
+
+            if (!_autoReportSessionArmed)
+                return;
+
+            if (s == NetState.Error || (s == NetState.WaitingInLobby && _lastDisconnectWasConnected))
+                TryAutoExportAndDisarm(status);
+        }
+
+        void TryAutoExportAndDisarm(string reason)
+        {
+            _autoReportSessionArmed = false;
+
+            string folder;
+            if (BugReportExporter.TryAutoExport(reason, out folder) && !string.IsNullOrEmpty(folder))
+                ConnectionHUD.Show("CupHeads report saved");
+        }
 
         void LogPairEvent(string eventName, string detail)
         {

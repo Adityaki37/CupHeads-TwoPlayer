@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.35 - 2026-04-27
+
+- Automatically creates a local paired bug-report folder after a connected multiplayer session disconnects, errors, or is shut down, so players do not need to click `EXPORT BUG REPORT` after reproducing a problem.
+- Added `Debug.AutoExportBugReports` config, enabled by default; automatic reports stay local and are not uploaded.
+- Added export mode/reason metadata to paired reports and the report-merging script.
+
 ## v1.2.34 - 2026-04-27
 
 - Added paired bug-report metadata so host and guest exports include the same lobby/session pairing key, role, network state, peer, and export time.

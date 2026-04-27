@@ -30,6 +30,7 @@ namespace CupheadOnline
         static ConfigEntry<bool> _cfgShowConnectionHud;
         static ConfigEntry<bool> _cfgVerboseLogging;
         static ConfigEntry<bool> _cfgAutoOpenSteamFriends;
+        static ConfigEntry<bool> _cfgAutoExportBugReports;
         static ConfigEntry<bool> _cfgShowCreditsMenu;
         static ConfigEntry<bool> _cfgShowPauseSessionPanel;
         static ConfigEntry<bool> _cfgShowBossHealthBars;
@@ -61,6 +62,7 @@ namespace CupheadOnline
         public static bool ShowConnectionHud => _cfgShowConnectionHud == null || _cfgShowConnectionHud.Value;
         public static bool VerboseLoggingEnabled => _cfgVerboseLogging != null && _cfgVerboseLogging.Value;
         public static bool AutoOpenSteamFriends => _cfgAutoOpenSteamFriends != null && _cfgAutoOpenSteamFriends.Value;
+        public static bool AutoExportBugReports => _cfgAutoExportBugReports == null || _cfgAutoExportBugReports.Value;
         public static bool ShowCreditsMenu => _cfgShowCreditsMenu == null || _cfgShowCreditsMenu.Value;
         public static bool ShowPauseSessionPanel => _cfgShowPauseSessionPanel == null || _cfgShowPauseSessionPanel.Value;
         public static bool ShowBossHealthBars => _cfgShowBossHealthBars == null || _cfgShowBossHealthBars.Value;
@@ -119,6 +121,8 @@ namespace CupheadOnline
                 "Enable extra diagnostic logging for menu and network helpers.");
             _cfgAutoOpenSteamFriends = Config.Bind("UI", "AutoOpenSteamFriendsOnJoin", false,
                 "Open the Steam Friends overlay immediately when Join Game is selected.");
+            _cfgAutoExportBugReports = Config.Bind("Debug", "AutoExportBugReports", true,
+                "Automatically create a local paired bug report after a connected multiplayer session disconnects, errors, or is shut down. This does not upload anything.");
             _cfgShowCreditsMenu = Config.Bind("UI", "ShowCreditsMenu", true,
                 "Show the custom Credits entry on the title screen.");
             _cfgShowPauseSessionPanel = Config.Bind("UI", "ShowPauseSessionPanel", true,
@@ -484,6 +488,7 @@ namespace CupheadOnline
                           + "HUD Enabled: " + ShowConnectionHud + nl
                           + "Verbose Logging: " + VerboseLoggingEnabled + nl
                           + "Auto Open Steam Friends: " + AutoOpenSteamFriends + nl
+                          + "Auto Export Bug Reports: " + AutoExportBugReports + nl
                           + "Show Credits Menu: " + ShowCreditsMenu + nl
                           + "Show Pause Session Panel: " + ShowPauseSessionPanel + nl
                           + "Show Boss Health Bars: " + ShowBossHealthBars + nl
@@ -517,6 +522,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.34";
+        public const string VERSION = "1.2.35";
     }
 }
