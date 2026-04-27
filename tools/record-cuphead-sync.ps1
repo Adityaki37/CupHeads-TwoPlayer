@@ -2,6 +2,7 @@ param(
     [int]$Fps = 10,
     [int]$MaxSeconds = 100,
     [string]$TargetBossLevel = "",
+    [switch]$SteamParityProfile,
     [switch]$UseLegacyClientLoadoutIds,
     [string]$HostRoot = "",
     [string]$ClientRoot = "",
@@ -26,6 +27,9 @@ if ([string]::IsNullOrWhiteSpace($HostRoot) -or [string]::IsNullOrWhiteSpace($Cl
 
 $hostRoot = (Resolve-Path $HostRoot).Path
 $clientRoot = (Resolve-Path $ClientRoot).Path
+if ($SteamParityProfile) {
+    $UseLegacyClientLoadoutIds = $true
+}
 
 function Resolve-OptionalToolPath([string]$commandName, [string[]]$candidatePaths) {
     $command = Get-Command $commandName -ErrorAction SilentlyContinue
@@ -567,7 +571,20 @@ while ((Get-Date) -lt $deadline) {
 $hostTextFinal = Read-Log $hostLog
 $clientTextFinal = Read-Log $clientLog
 $hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "Fight smoke complete|HOST PASS|FAIL" } | Select-Object -Last 8) -join "`n"
-$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "Client host-checkpoint sync complete|CLIENT PASS|FAIL|Received host fight checkpoint" } | Select-Object -Last 8) -join "`n"
+$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "Client host-checkpoint sync complete|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout" } | Select-Object -Last 8) -join "`n"
+$legacyLoadoutFixtureExercised = $false
+$steamParityFailure = ""
+if ($UseLegacyClientLoadoutIds) {
+    $legacyLoadoutFixtureExercised =
+        ($clientTextFinal -match "W1=9->") -or
+        ($clientTextFinal -match "W1=9\s") -or
+        ($hostTextFinal -match "W1=9\s")
+
+    if ($SteamParityProfile -and -not $legacyLoadoutFixtureExercised) {
+        $failed = $true
+        $steamParityFailure = "Steam parity profile did not exercise the legacy client loadout fixture."
+    }
+}
 
 $bossFrames = @($metrics | Where-Object { $_.BossBarVisible })
 $bossMismatchFrames = @($bossFrames | Where-Object { $_.BossRedDeltaPct -gt 1.0 -or -not $_.BossBarBoxesMatch })
@@ -591,6 +608,10 @@ $report = [pscustomobject]@{
     HostPass = $hostPass
     ClientPass = $clientPass
     Failed = $failed
+    SteamParityProfile = [bool]$SteamParityProfile
+    LegacyClientLoadoutIds = [bool]$UseLegacyClientLoadoutIds
+    LegacyLoadoutFixtureExercised = [bool]$legacyLoadoutFixtureExercised
+    SteamParityFailure = $steamParityFailure
     VideoPath = $videoPath
     FramesDirectory = $framesDir
     BossVisibleFrameCount = $bossFrames.Count
