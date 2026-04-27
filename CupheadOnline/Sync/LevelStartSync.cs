@@ -26,6 +26,9 @@ namespace CupheadOnline.Sync
         static bool _holdingTimeScale;
         static float _lastLogAt;
 
+        public static bool IsHostWaitingForGuestStart => _hostGateActive && !_hostReleaseSent;
+        public static bool IsClientWaitingForStartRelease => _clientGateActive && !_clientReleaseReceived;
+
         public static void BeginHostLevelLoad(Levels level)
         {
             if (!MultiplayerSession.IsActive || !MultiplayerSession.IsHost || Plugin.Net == null || !Plugin.Net.IsConnected)

@@ -85,6 +85,14 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(PlayerStatsManager), "LevelInit")]
     public static class StatsLevelInitPatch
     {
+        static void Prefix(PlayerStatsManager __instance)
+        {
+            if (__instance == null) return;
+            var player = __instance.GetComponent<AbstractPlayerController>();
+            if (player == null) return;
+            LoadoutReplicator.SanitizePlayerLoadout(player.id);
+        }
+
         static void Postfix(PlayerStatsManager __instance)
         {
             if (!MultiplayerSession.IsActive) return;
@@ -92,6 +100,16 @@ namespace CupheadOnline.Patches
             if (player == null) return;
             if (MultiplayerSession.IsNetworkControlledPlayer(player.id))
                 LoadoutReplicator.ApplyPending(__instance, player.id);
+            LoadoutReplicator.SanitizePlayerLoadout(player.id, __instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(LevelPlayerWeaponManager), "LevelInit")]
+    public static class LevelPlayerWeaponManagerLoadoutPatch
+    {
+        static void Prefix(LevelPlayerWeaponManager __instance, PlayerId id)
+        {
+            LoadoutReplicator.SanitizePlayerLoadout(id, __instance == null ? null : __instance.player?.stats);
         }
     }
 

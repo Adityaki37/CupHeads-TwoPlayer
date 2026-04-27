@@ -1,3 +1,4 @@
+using System;
 using CupheadOnline.Net;
 using HarmonyLib;
 using UnityEngine;
@@ -20,6 +21,36 @@ namespace CupheadOnline.Sync
         private static LobbySyncPacket? _lastSent;
         private static LobbySyncPacket? _lastReceived;
         private static float _nextBroadcastAt;
+        private static int _lastSanitizedPlayerId = -1;
+        private static string _lastSanitizedSummary = string.Empty;
+
+        static readonly Weapon[] UsableLevelWeapons =
+        {
+            Weapon.level_weapon_peashot,
+            Weapon.level_weapon_spreadshot,
+            Weapon.level_weapon_arc,
+            Weapon.level_weapon_homing,
+            Weapon.level_weapon_exploder,
+            Weapon.level_weapon_charge,
+            Weapon.level_weapon_boomerang,
+            Weapon.level_weapon_bouncer,
+            Weapon.level_weapon_wide_shot,
+            Weapon.level_weapon_upshot,
+            Weapon.level_weapon_crackshot,
+        };
+
+        static readonly Weapon[] LegacyWeaponSlots =
+        {
+            Weapon.level_weapon_peashot,
+            Weapon.level_weapon_spreadshot,
+            Weapon.level_weapon_homing,
+            Weapon.level_weapon_bouncer,
+            Weapon.level_weapon_charge,
+            Weapon.level_weapon_boomerang,
+            Weapon.level_weapon_crackshot,
+            Weapon.level_weapon_wide_shot,
+            Weapon.level_weapon_upshot,
+        };
 
         static LoadoutReplicator()
         {
@@ -29,6 +60,7 @@ namespace CupheadOnline.Sync
 
         public static void Apply(LobbySyncPacket pkt)
         {
+            NormalizePacket(ref pkt);
             _pending = pkt;
             ApplyToPlayerData((PlayerId)pkt.PlayerId, pkt);
             if (ShouldApplyLiveNow())
@@ -49,9 +81,62 @@ namespace CupheadOnline.Sync
             var pkt = _pending.Value;
             if (pkt.PlayerId != (byte)id) return;
 
+            NormalizePacket(ref pkt);
             ApplyToPlayerData(id, pkt);
             ApplyToStats(stats, pkt);
             _pending = null;
+        }
+
+        public static void SanitizePlayerLoadout(PlayerId id)
+        {
+            SanitizePlayerLoadout(id, null);
+        }
+
+        public static void SanitizePlayerLoadout(PlayerId id, PlayerStatsManager stats)
+        {
+            if (PlayerData.Data == null || PlayerData.Data.Loadouts == null)
+                return;
+
+            try
+            {
+                var loadout = PlayerData.Data.Loadouts.GetPlayerLoadout(id);
+                if (loadout == null)
+                    return;
+
+                int originalWeapon1 = (int)loadout.primaryWeapon;
+                int originalWeapon2 = (int)loadout.secondaryWeapon;
+                int originalSuper = (int)loadout.super;
+                int originalCharm = (int)loadout.charm;
+
+                loadout.primaryWeapon = NormalizePrimaryWeapon(originalWeapon1);
+                loadout.secondaryWeapon = NormalizeSecondaryWeapon(originalWeapon2);
+                loadout.super = NormalizeSuper(originalSuper);
+                loadout.charm = NormalizeCharm(originalCharm);
+
+                if (stats != null)
+                {
+                    Traverse.Create(stats).Property("Loadout").SetValue(loadout);
+                    try { stats.isChalice = loadout.charm == Charm.charm_chalice; }
+                    catch { }
+                }
+
+                if (originalWeapon1 != (int)loadout.primaryWeapon
+                 || originalWeapon2 != (int)loadout.secondaryWeapon
+                 || originalSuper != (int)loadout.super
+                 || originalCharm != (int)loadout.charm)
+                {
+                    LogSanitized(
+                        id,
+                        "W1=" + originalWeapon1 + "->" + (int)loadout.primaryWeapon
+                        + " W2=" + originalWeapon2 + "->" + (int)loadout.secondaryWeapon
+                        + " Super=" + originalSuper + "->" + (int)loadout.super
+                        + " Charm=" + originalCharm + "->" + (int)loadout.charm);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[Loadout] Could not sanitize Player " + (int)id + " loadout: " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -112,10 +197,10 @@ namespace CupheadOnline.Sync
             pkt = new LobbySyncPacket
             {
                 PlayerId  = (byte)MultiplayerSession.LocalId,
-                Weapon1   = (int)loadout.primaryWeapon,
-                Weapon2   = (int)loadout.secondaryWeapon,
-                Super     = (int)loadout.super,
-                Charm     = (int)loadout.charm,
+                Weapon1   = (int)NormalizePrimaryWeapon((int)loadout.primaryWeapon),
+                Weapon2   = (int)NormalizeSecondaryWeapon((int)loadout.secondaryWeapon),
+                Super     = (int)NormalizeSuper((int)loadout.super),
+                Charm     = (int)NormalizeCharm((int)loadout.charm),
                 IsChalice = (byte)(isChalice ? 1 : 0),
             };
             return true;
@@ -129,10 +214,10 @@ namespace CupheadOnline.Sync
                     return;
 
                 var loadout = PlayerData.Data.Loadouts.GetPlayerLoadout(id);
-                loadout.primaryWeapon = (Weapon)pkt.Weapon1;
-                loadout.secondaryWeapon = (Weapon)pkt.Weapon2;
-                loadout.super = (Super)pkt.Super;
-                loadout.charm = (Charm)pkt.Charm;
+                loadout.primaryWeapon = NormalizePrimaryWeapon(pkt.Weapon1);
+                loadout.secondaryWeapon = NormalizeSecondaryWeapon(pkt.Weapon2);
+                loadout.super = NormalizeSuper(pkt.Super);
+                loadout.charm = NormalizeCharm(pkt.Charm);
             }
             catch
             {
@@ -163,14 +248,124 @@ namespace CupheadOnline.Sync
                 return;
 
             var loadout = stats.Loadout;
-            loadout.primaryWeapon = (Weapon)pkt.Weapon1;
-            loadout.secondaryWeapon = (Weapon)pkt.Weapon2;
-            loadout.super = (Super)pkt.Super;
-            loadout.charm = (Charm)pkt.Charm;
+            loadout.primaryWeapon = NormalizePrimaryWeapon(pkt.Weapon1);
+            loadout.secondaryWeapon = NormalizeSecondaryWeapon(pkt.Weapon2);
+            loadout.super = NormalizeSuper(pkt.Super);
+            loadout.charm = NormalizeCharm(pkt.Charm);
             Traverse.Create(stats).Property("Loadout").SetValue(loadout);
 
             try { stats.isChalice = pkt.IsChalice != 0; }
             catch { }
+        }
+
+        static void NormalizePacket(ref LobbySyncPacket pkt)
+        {
+            int originalWeapon1 = pkt.Weapon1;
+            int originalWeapon2 = pkt.Weapon2;
+            int originalSuper = pkt.Super;
+            int originalCharm = pkt.Charm;
+
+            pkt.Weapon1 = (int)NormalizePrimaryWeapon(pkt.Weapon1);
+            pkt.Weapon2 = (int)NormalizeSecondaryWeapon(pkt.Weapon2);
+            pkt.Super = (int)NormalizeSuper(pkt.Super);
+            pkt.Charm = (int)NormalizeCharm(pkt.Charm);
+
+            if (originalWeapon1 != pkt.Weapon1
+             || originalWeapon2 != pkt.Weapon2
+             || originalSuper != pkt.Super
+             || originalCharm != pkt.Charm)
+            {
+                LogSanitized(
+                    (PlayerId)pkt.PlayerId,
+                    "packet W1=" + originalWeapon1 + "->" + pkt.Weapon1
+                    + " W2=" + originalWeapon2 + "->" + pkt.Weapon2
+                    + " Super=" + originalSuper + "->" + pkt.Super
+                    + " Charm=" + originalCharm + "->" + pkt.Charm);
+            }
+        }
+
+        static Weapon NormalizePrimaryWeapon(int raw)
+        {
+            Weapon weapon;
+            if (TryNormalizeLevelWeapon(raw, allowNone: false, out weapon))
+                return weapon;
+
+            return Weapon.level_weapon_peashot;
+        }
+
+        static Weapon NormalizeSecondaryWeapon(int raw)
+        {
+            Weapon weapon;
+            if (TryNormalizeLevelWeapon(raw, allowNone: true, out weapon))
+                return weapon;
+
+            return Weapon.None;
+        }
+
+        static bool TryNormalizeLevelWeapon(int raw, bool allowNone, out Weapon weapon)
+        {
+            if (allowNone && IsNoneLike(raw))
+            {
+                weapon = Weapon.None;
+                return true;
+            }
+
+            if (Enum.IsDefined(typeof(Weapon), raw))
+            {
+                weapon = (Weapon)raw;
+                if (weapon == Weapon.None)
+                    return allowNone;
+
+                return IsUsableLevelWeapon(weapon);
+            }
+
+            if (raw >= 0 && raw < LegacyWeaponSlots.Length)
+            {
+                weapon = LegacyWeaponSlots[raw];
+                return true;
+            }
+
+            weapon = Weapon.None;
+            return false;
+        }
+
+        static bool IsUsableLevelWeapon(Weapon weapon)
+        {
+            for (int i = 0; i < UsableLevelWeapons.Length; i++)
+                if (UsableLevelWeapons[i] == weapon)
+                    return true;
+            return false;
+        }
+
+        static Super NormalizeSuper(int raw)
+        {
+            if (IsNoneLike(raw))
+                return Super.None;
+
+            return Enum.IsDefined(typeof(Super), raw) ? (Super)raw : Super.None;
+        }
+
+        static Charm NormalizeCharm(int raw)
+        {
+            if (IsNoneLike(raw))
+                return Charm.None;
+
+            return Enum.IsDefined(typeof(Charm), raw) ? (Charm)raw : Charm.None;
+        }
+
+        static bool IsNoneLike(int raw)
+        {
+            return raw == -1 || raw == 255 || raw == int.MaxValue;
+        }
+
+        static void LogSanitized(PlayerId id, string summary)
+        {
+            if (_lastSanitizedPlayerId == (int)id && _lastSanitizedSummary == summary)
+                return;
+
+            _lastSanitizedPlayerId = (int)id;
+            _lastSanitizedSummary = summary;
+            Plugin.Log.LogWarning("[Loadout] Sanitized Player " + (int)id + " loadout: " + summary + ".");
         }
 
         static bool ShouldBroadcastNow()
@@ -199,6 +394,8 @@ namespace CupheadOnline.Sync
             _lastSent = null;
             _lastReceived = null;
             _nextBroadcastAt = 0f;
+            _lastSanitizedPlayerId = -1;
+            _lastSanitizedSummary = string.Empty;
         }
     }
 }

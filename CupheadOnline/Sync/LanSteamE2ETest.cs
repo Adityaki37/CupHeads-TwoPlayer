@@ -86,10 +86,14 @@ namespace CupheadOnline.Sync
         static float _clientDialogueLocalContinueAt;
         static float _hostDialogueContinueObservedAt;
         static float _clientLevelReachedAt;
+        static float _clientFightReleasedAt;
         static bool _hasFightStartBossHealth;
         static string _fightStartBossName = string.Empty;
         static float _fightStartBossHealth;
         static float _fightStartBossTotal;
+        static bool _hostSawP1Shooting;
+        static bool _hostSawP2Shooting;
+        static bool _clientSawP2Shooting;
         static Vector2 _hostAxis;
         static uint _hostButtons;
         static uint _hostDownButtons;
@@ -677,6 +681,15 @@ namespace CupheadOnline.Sync
             KeepScriptedPlayersAlive();
             HoldHost(CupheadButton.Shoot);
             CheckRemoteInput();
+            TrackHostShootingState(
+                PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController,
+                PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController);
+
+            if (LevelStartSync.IsHostWaitingForGuestStart)
+            {
+                _stageStartedAt = Time.unscaledTime;
+                return;
+            }
 
             if (!_hasFightStartBossHealth && Time.unscaledTime - _stageStartedAt > 1f)
             {
@@ -694,6 +707,7 @@ namespace CupheadOnline.Sync
             var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
             var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
             KeepScriptedPlayersAlive(p1, p2);
+            TrackHostShootingState(p1, p2);
             string endBossName;
             float endBossHealth;
             float endBossTotal;
@@ -733,6 +747,16 @@ namespace CupheadOnline.Sync
             if (!_sawRemoteInput)
             {
                 Fail("Host did not observe client input frames for Player Two.");
+                return;
+            }
+
+            if (!_hostSawP1Shooting || !_hostSawP2Shooting)
+            {
+                Fail("Host did not observe both players shooting during the fight smoke: P1="
+                    + _hostSawP1Shooting
+                    + " P2="
+                    + _hostSawP2Shooting
+                    + ".");
                 return;
             }
 
@@ -850,6 +874,18 @@ namespace CupheadOnline.Sync
                 CaptureScreen("client_level_" + sceneName);
             }
 
+            if (LevelStartSync.IsClientWaitingForStartRelease
+             || (Time.timeScale == 0f && PauseManager.state != PauseManager.State.Paused))
+            {
+                _clientFightReleasedAt = 0f;
+                return;
+            }
+
+            if (_clientFightReleasedAt <= 0f)
+                _clientFightReleasedAt = Time.unscaledTime;
+
+            TrackClientShootingState(p2);
+
             if (p2.IsDead || p2.stats.Health <= 0)
             {
                 Fail("Client saw Player Two dead in level: " + DescribeLevelPlayer(p2) + ".");
@@ -862,7 +898,13 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            if (!_remoteCheckpointReceived && Time.unscaledTime - _clientLevelReachedAt < FightDuration)
+            if (_clientFightReleasedAt > 0f && Time.unscaledTime - _clientFightReleasedAt > 2f && !_clientSawP2Shooting)
+            {
+                Fail("Client did not observe local Player Two shooting during the fight smoke.");
+                return;
+            }
+
+            if (!_remoteCheckpointReceived && _clientFightReleasedAt > 0f && Time.unscaledTime - _clientFightReleasedAt < FightDuration)
                 return;
 
             Log((_remoteCheckpointReceived ? "Client host-checkpoint sync complete" : "Client fight sync complete")
@@ -917,6 +959,31 @@ namespace CupheadOnline.Sync
         {
             RestoreScriptedPlayerHealth(p1);
             RestoreScriptedPlayerHealth(p2);
+        }
+
+        static void TrackHostShootingState(LevelPlayerController p1, LevelPlayerController p2)
+        {
+            _hostSawP1Shooting = _hostSawP1Shooting || IsPlayerShooting(p1);
+            _hostSawP2Shooting = _hostSawP2Shooting || IsPlayerShooting(p2);
+        }
+
+        static void TrackClientShootingState(LevelPlayerController p2)
+        {
+            _clientSawP2Shooting = _clientSawP2Shooting || IsPlayerShooting(p2);
+        }
+
+        static bool IsPlayerShooting(LevelPlayerController player)
+        {
+            try
+            {
+                return player != null
+                    && player.weaponManager != null
+                    && player.weaponManager.IsShooting;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         static void RestoreScriptedPlayerHealth(LevelPlayerController player)
@@ -1343,6 +1410,7 @@ namespace CupheadOnline.Sync
                 _clientDialogueInteractPressed = false;
                 _clientDialogueAdvancePressed = false;
                 _clientLevelReachedAt = 0f;
+                _clientFightReleasedAt = 0f;
                 _clientDialogueStartObservedAt = 0f;
                 _clientDialogueContinueObservedAt = 0f;
                 _clientDialogueLocalContinueAt = 0f;
@@ -1351,6 +1419,9 @@ namespace CupheadOnline.Sync
                 _fightStartBossName = string.Empty;
                 _fightStartBossHealth = 0f;
                 _fightStartBossTotal = 0f;
+                _hostSawP1Shooting = false;
+                _hostSawP2Shooting = false;
+                _clientSawP2Shooting = false;
             }
             ResetScriptedInput();
             Log(message);

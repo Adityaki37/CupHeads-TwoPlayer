@@ -2,6 +2,7 @@ param(
     [int]$Fps = 10,
     [int]$MaxSeconds = 100,
     [string]$TargetBossLevel = "",
+    [switch]$UseLegacyClientLoadoutIds,
     [string]$HostRoot = "",
     [string]$ClientRoot = "",
     [string]$OutputRoot = ""
@@ -66,6 +67,12 @@ function Reset-TestSaves {
         $data.loadouts.playerTwo.secondaryWeapon = 2147483647
         $data.loadouts.playerTwo.super = 2147483647
         $data.loadouts.playerTwo.charm = 2147483647
+        if ($UseLegacyClientLoadoutIds -and $root -ieq $clientRoot) {
+            $data.loadouts.playerTwo.primaryWeapon = 9
+            $data.loadouts.playerTwo.secondaryWeapon = 255
+            $data.loadouts.playerTwo.super = 255
+            $data.loadouts.playerTwo.charm = 255
+        }
 
         $data.mapDataManager.currentMap = 3
         $data.mapDataManager.mapData = @([pscustomobject]@{

@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.32 - 2026-04-27
+
+- Sanitized multiplayer loadout packets and level-start loadouts so invalid or legacy weapon IDs fall back to usable weapons instead of leaving a player unable to shoot.
+- Applied the loadout sanitizer before both player stats and weapon manager initialization, covering the Steam host/client level-start path.
+- Expanded the LAN/Steam-emulation verifier to seed the bad `9/255` Player Two loadout seen in the live log and assert that both players actually enter a shooting state after the synchronized level-start release.
+
 ## v1.2.31 - 2026-04-26
 
 - Added host/client sync for overworld NPC dialogue starts, advances, and closes so both players see the same speech bubble progression.
