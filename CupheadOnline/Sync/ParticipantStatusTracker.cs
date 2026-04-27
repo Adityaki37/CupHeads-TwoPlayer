@@ -90,7 +90,7 @@ namespace CupheadOnline.Sync
             if (!fromRemote
              || !Plugin.VanillaTwoPlayerOnline
              || !MultiplayerSession.IsClient
-             || pkt.ParticipantId != (byte)MultiplayerSession.LocalId)
+             || pkt.ParticipantId > (byte)PlayerId.PlayerTwo)
             {
                 return false;
             }
@@ -101,7 +101,7 @@ namespace CupheadOnline.Sync
 
             Plugin.Log.LogInfo(
                 "[StatusSync] Accepting host revive status for local "
-                + MultiplayerSession.LocalId
+                + (PlayerId)pkt.ParticipantId
                 + " despite independent local tick ordering: localTick="
                 + existing.Tick
                 + " hostTick="

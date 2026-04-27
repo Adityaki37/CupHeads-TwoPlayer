@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.40 - 2026-04-27
+
+- Mirrored host-observed built-in revives for both built-in player slots on the guest, covering the reverse case where Player One dies and Player Two revives them.
+- Expanded the LAN/Steam-emulation verifier to run both revive directions before the boss fight: P2 down/P1 revive and P1 down/P2 revive.
+
 ## v1.2.39 - 2026-04-27
 
 - Fixed the boss health overlay's visual fill so the red/orange bar width shrinks as health drops instead of only updating the numeric HP text.

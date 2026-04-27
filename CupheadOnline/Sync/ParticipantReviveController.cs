@@ -150,23 +150,30 @@ namespace CupheadOnline.Sync
         {
             if (!MultiplayerSession.IsActive || !MultiplayerSession.IsClient)
                 return false;
-            if (pkt.ParticipantId != (byte)MultiplayerSession.LocalId)
+            if (pkt.ParticipantId > (byte)PlayerId.PlayerTwo)
                 return false;
             if (pkt.IsDead || pkt.Health <= 0)
                 return false;
 
-            var player = GetPlayerSafe(MultiplayerSession.LocalId);
+            var playerId = (PlayerId)pkt.ParticipantId;
+            if (MultiplayerSession.IsAuthoritativePlayer(playerId)
+             && pkt.ParticipantId != (byte)MultiplayerSession.LocalId)
+            {
+                return false;
+            }
+
+            var player = GetPlayerSafe(playerId);
             if (player == null || !player.IsDead)
                 return false;
 
             Vector2 revivePosition;
-            if (!TryGetHostRevivePosition((PlayerId)pkt.ParticipantId, out revivePosition))
+            if (!TryGetHostRevivePosition(playerId, out revivePosition))
                 revivePosition = player.center;
 
-            ApplyLocalRevive(MultiplayerSession.LocalId, revivePosition);
+            ApplyLocalRevive(playerId, revivePosition, pushStatus: false);
             Plugin.Log.LogInfo(
                 "[ReviveSync] Mirrored host revive for "
-                + MultiplayerSession.LocalId
+                + playerId
                 + " from status tick "
                 + pkt.Tick
                 + " at ("
@@ -215,7 +222,7 @@ namespace CupheadOnline.Sync
             ParticipantStatusTracker.PushLocalStatus(player);
         }
 
-        static void ApplyLocalRevive(PlayerId localPlayerId, Vector2 revivePosition)
+        static void ApplyLocalRevive(PlayerId localPlayerId, Vector2 revivePosition, bool pushStatus = true)
         {
             var player = GetPlayerSafe(localPlayerId);
             if (player == null)
@@ -237,7 +244,8 @@ namespace CupheadOnline.Sync
             if (deathEffect != null)
                 Object.Destroy(deathEffect.gameObject);
 
-            ParticipantStatusTracker.PushLocalStatus(player);
+            if (pushStatus)
+                ParticipantStatusTracker.PushLocalStatus(player);
         }
 
         static bool TryGetHostRevivePosition(PlayerId playerId, out Vector2 position)

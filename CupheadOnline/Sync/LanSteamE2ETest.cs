@@ -103,6 +103,12 @@ namespace CupheadOnline.Sync
         static bool _clientReviveDeathForced;
         static bool _clientReviveMirrorVerified;
         static bool _clientReviveObservedSignalReceived;
+        static bool _clientReverseReviveTestStartSignalReceived;
+        static bool _clientReverseReviveDeathForced;
+        static bool _clientReverseReviveMirrorVerified;
+        static bool _clientReverseReviveObservedSignalReceived;
+        static bool _clientReverseReviveJumpPressed;
+        static bool _clientReverseReviveParryPressed;
         static bool _hostPausePressed;
         static bool _hostPauseObserved;
         static bool _hostUnpausePressed;
@@ -114,16 +120,31 @@ namespace CupheadOnline.Sync
         static bool _hostReviveSwitchTriggered;
         static bool _hostReviveAnimCompleteTriggered;
         static bool _hostReviveVerified;
+        static bool _hostReviveForwardCompleteLogged;
+        static bool _hostReverseReviveStartSignalSent;
+        static bool _hostReverseReviveDeathForced;
+        static bool _hostReverseReviveJumpPressed;
+        static bool _hostReverseReviveParryPressed;
+        static bool _hostReverseReviveSwitchTriggered;
+        static bool _hostReverseReviveAnimCompleteTriggered;
+        static bool _hostReverseReviveVerified;
         static bool _hostFightTimerResetAfterRevive;
         static bool _hostDialogueInteractPressed;
         static bool _hostDialogueForceStarted;
         static bool _clientDialogueInteractPressed;
         static bool _clientDialogueAdvancePressed;
         static float _clientReviveDeathAt;
+        static float _clientReverseReviveDeathAt;
+        static float _clientReverseReviveJumpAt;
+        static float _clientReverseReviveParryAt;
         static float _hostReviveDeathAt;
         static float _hostReviveJumpAt;
         static float _hostReviveParryAt;
         static float _hostReviveVerifiedAt;
+        static float _hostReverseReviveDeathAt;
+        static float _hostReverseReviveJumpAt;
+        static float _hostReverseReviveParryAt;
+        static float _hostReverseReviveVerifiedAt;
         static float _clientDialogueStartObservedAt;
         static float _clientDialogueContinueObservedAt;
         static float _clientDialogueLocalContinueAt;
@@ -278,6 +299,20 @@ namespace CupheadOnline.Sync
                     {
                         _clientReviveObservedSignalReceived = true;
                         Log("Client reported mirrored built-in Player Two revive.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EReverseReviveTestStarted:
+                    if (MultiplayerSession.IsClient)
+                    {
+                        _clientReverseReviveTestStartSignalReceived = true;
+                        Log("Received host reverse built-in death/parry revive smoke start.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EReverseReviveObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientReverseReviveObservedSignalReceived = true;
+                        Log("Client reported mirrored built-in Player One revive.");
                     }
                     return true;
                 default:
@@ -770,6 +805,9 @@ namespace CupheadOnline.Sync
             if (!RunHostBuiltInReviveSmoke())
                 return;
 
+            if (!RunHostReverseBuiltInReviveSmoke())
+                return;
+
             KeepScriptedPlayersAlive();
             HoldHost(CupheadButton.Shoot);
             CheckRemoteInput();
@@ -1074,6 +1112,12 @@ namespace CupheadOnline.Sync
             if (!_clientReviveMirrorVerified)
             {
                 RunClientBuiltInReviveObserver(p2);
+                return;
+            }
+
+            if (!_clientReverseReviveMirrorVerified)
+            {
+                RunClientReverseBuiltInReviveObserver(p1, p2);
                 return;
             }
 
@@ -1657,12 +1701,108 @@ namespace CupheadOnline.Sync
                 return false;
             }
 
+            if (!_hostReviveForwardCompleteLogged)
+            {
+                _hostReviveForwardCompleteLogged = true;
+                Log("Built-in Player Two death/parry revive verified on both peers; starting reverse Player One revive smoke.");
+            }
+            return true;
+        }
+
+        static bool RunHostReverseBuiltInReviveSmoke()
+        {
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (p1 == null || p1.stats == null || p2 == null || p2.stats == null)
+                return false;
+
+            RestoreScriptedPlayerHealth(p2);
+            CheckRemoteInput();
+            _hostAxis = Vector2.zero;
+            _hostButtons &= ~ButtonMask(CupheadButton.Shoot);
+
+            if (!_hostReverseReviveStartSignalSent)
+            {
+                _hostReverseReviveStartSignalSent = true;
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReverseReviveTestStarted);
+                Log("Starting reverse built-in death/parry revive smoke; client will put local Player One into the same dead state and drive Player Two jump/parry.");
+            }
+
+            if (!_hostReverseReviveDeathForced)
+            {
+                if (Time.unscaledTime - _hostReviveVerifiedAt < 0.5f)
+                    return false;
+
+                if (!ForceBuiltInPlayerDeath(p1, "host reverse"))
+                    return false;
+
+                _hostReverseReviveDeathForced = true;
+                _hostReverseReviveDeathAt = Time.unscaledTime;
+                Log("Host forced Player One through the real level death path: " + DescribeLevelPlayer(p1) + ".");
+                CaptureScreen("host_reverse_revive_dead_" + SceneManager.GetActiveScene().name);
+                return false;
+            }
+
+            if (!_hostReverseReviveVerified)
+            {
+                var effect = FindPlayerDeathEffect(PlayerId.PlayerOne);
+                bool fullyRevived = !p1.IsDead
+                    && p1.stats.Health > 0
+                    && p1.gameObject.activeInHierarchy;
+
+                if (!fullyRevived)
+                {
+                    if (_hostReverseReviveSwitchTriggered
+                     && !_hostReverseReviveAnimCompleteTriggered
+                     && effect != null
+                     && Time.unscaledTime - _hostReverseReviveParryAt > 0.45f)
+                    {
+                        CompleteReverseDeathBubbleParryAnimation(effect);
+                    }
+
+                    if (effect == null && Time.unscaledTime - _hostReverseReviveDeathAt > 1.5f)
+                    {
+                        Fail("Host Player One death bubble disappeared before the Player Two jump/parry revive completed.");
+                        return false;
+                    }
+
+                    if (effect != null)
+                        DriveHostPlayerTwoJumpParryRevive(p2, effect);
+
+                    if (_hostReverseReviveParryPressed && Time.unscaledTime - _hostReverseReviveParryAt > ReviveSmokeTimeout)
+                    {
+                        Fail("Host Player Two jump/parry did not revive Player One through the built-in death bubble.");
+                        return false;
+                    }
+
+                    return false;
+                }
+
+                _hostReverseReviveVerified = true;
+                _hostReverseReviveVerifiedAt = Time.unscaledTime;
+                ParticipantStatusTracker.PushLocalStatus(p1);
+                Log("Host verified reverse built-in jump/parry revive: " + DescribeLevelPlayer(p1) + ".");
+                CaptureScreen("host_reverse_revive_complete_" + SceneManager.GetActiveScene().name);
+                return false;
+            }
+
+            if (!_clientReverseReviveObservedSignalReceived)
+            {
+                if (Time.unscaledTime - _hostReverseReviveVerifiedAt > ReviveSmokeTimeout)
+                {
+                    Fail("Client did not report Player One revived after the reverse built-in parry revive.");
+                    return false;
+                }
+
+                return false;
+            }
+
             if (!_hostFightTimerResetAfterRevive)
             {
                 _hostFightTimerResetAfterRevive = true;
                 _stageStartedAt = Time.unscaledTime;
                 _lastLogAt = -100f;
-                Log("Built-in death/parry revive verified on both peers; starting fight damage window.");
+                Log("Forward and reverse built-in death/parry revives verified on both peers; starting fight damage window.");
             }
 
             return true;
@@ -1708,6 +1848,69 @@ namespace CupheadOnline.Sync
             SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReviveObserved);
         }
 
+        static void RunClientReverseBuiltInReviveObserver(LevelPlayerController p1, LevelPlayerController p2)
+        {
+            if (!_clientReverseReviveTestStartSignalReceived)
+                return;
+
+            if (p1 == null || p1.stats == null || p2 == null || p2.stats == null)
+            {
+                Fail("Cannot verify client reverse built-in revive mirror; Player One or Player Two is missing.");
+                return;
+            }
+
+            if (!_clientReverseReviveDeathForced)
+            {
+                if (!ForceBuiltInPlayerDeath(p1, "client reverse"))
+                    return;
+
+                _clientReverseReviveDeathForced = true;
+                _clientReverseReviveDeathAt = Time.unscaledTime;
+                Log("Client forced local Player One through the real level death path; driving Player Two jump/parry and waiting for host revive status.");
+                CaptureScreen("client_reverse_revive_dead_" + SceneManager.GetActiveScene().name);
+                return;
+            }
+
+            if (!_clientReverseReviveJumpPressed)
+            {
+                if (Time.unscaledTime - _clientReverseReviveDeathAt <= 0.35f)
+                    return;
+
+                _clientReverseReviveJumpPressed = true;
+                _clientReverseReviveJumpAt = Time.unscaledTime;
+                PressClient(CupheadButton.Jump);
+                Log("Client pressed Player Two jump for reverse death-bubble revive test.");
+                return;
+            }
+
+            if (!_clientReverseReviveParryPressed)
+            {
+                if (Time.unscaledTime - _clientReverseReviveJumpAt <= 0.24f)
+                    return;
+
+                _clientReverseReviveParryPressed = true;
+                _clientReverseReviveParryAt = Time.unscaledTime;
+                PressClient(CupheadButton.Jump);
+                Log("Client pressed Player Two second jump/parry for reverse death-bubble revive test.");
+            }
+
+            bool fullyRevived = !p1.IsDead
+                && p1.stats.Health > 0
+                && p1.gameObject.activeInHierarchy;
+            if (!fullyRevived)
+            {
+                if (Time.unscaledTime - _clientReverseReviveDeathAt > ReviveSmokeTimeout)
+                    Fail("Client Player One stayed dead after the reverse host built-in parry revive.");
+                return;
+            }
+
+            _clientReverseReviveMirrorVerified = true;
+            _clientFightReleasedAt = Time.unscaledTime;
+            Log("Verified client Player One revived from the host reverse built-in parry status: " + DescribeLevelPlayer(p1) + ".");
+            CaptureScreen("client_reverse_revive_complete_" + SceneManager.GetActiveScene().name);
+            SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReverseReviveObserved);
+        }
+
         static void DriveHostJumpParryRevive(LevelPlayerController p1, PlayerDeathEffect effect)
         {
             if (p1 == null || effect == null)
@@ -1744,6 +1947,42 @@ namespace CupheadOnline.Sync
 
             if (!_hostReviveSwitchTriggered && Time.unscaledTime - _hostReviveParryAt > 0.12f)
                 TriggerDeathBubbleParrySwitch(p1, effect);
+        }
+
+        static void DriveHostPlayerTwoJumpParryRevive(LevelPlayerController p2, PlayerDeathEffect effect)
+        {
+            if (p2 == null || effect == null)
+                return;
+
+            if (!_hostReverseReviveJumpPressed)
+            {
+                PlaceDeathBubbleForHostParry(p2, effect, 70f);
+                if (Time.unscaledTime - _hostReverseReviveDeathAt <= 0.35f)
+                    return;
+
+                _hostReverseReviveJumpPressed = true;
+                _hostReverseReviveJumpAt = Time.unscaledTime;
+                Log("Host observed/scripted Player Two jump for reverse death-bubble revive test.");
+                return;
+            }
+
+            if (!_hostReverseReviveParryPressed)
+            {
+                PlaceDeathBubbleForHostParry(p2, effect, 35f);
+                if (Time.unscaledTime - _hostReverseReviveJumpAt <= 0.24f)
+                    return;
+
+                _hostReverseReviveParryPressed = true;
+                _hostReverseReviveParryAt = Time.unscaledTime;
+                Log("Host observed/scripted Player Two second jump/parry against Player One's death bubble.");
+                return;
+            }
+
+            if (Time.unscaledTime - _hostReverseReviveParryAt <= 1.25f)
+                PlaceDeathBubbleForHostParry(p2, effect, 0f);
+
+            if (!_hostReverseReviveSwitchTriggered && Time.unscaledTime - _hostReverseReviveParryAt > 0.12f)
+                TriggerReverseDeathBubbleParrySwitch(p2, effect);
         }
 
         static void PlaceDeathBubbleForHostParry(LevelPlayerController p1, PlayerDeathEffect effect, float yOffset)
@@ -1783,6 +2022,35 @@ namespace CupheadOnline.Sync
             }
         }
 
+        static void TriggerReverseDeathBubbleParrySwitch(LevelPlayerController p2, PlayerDeathEffect effect)
+        {
+            if (p2 == null || effect == null)
+                return;
+            if (PlayerDeathEffectParrySwitchField == null
+             || ParrySwitchOnParryPrePauseMethod == null
+             || ParrySwitchOnParryPostPauseMethod == null)
+            {
+                return;
+            }
+
+            var parrySwitch = PlayerDeathEffectParrySwitchField.GetValue(effect) as PlayerDeathParrySwitch;
+            if (parrySwitch == null)
+                return;
+
+            try
+            {
+                _hostReverseReviveSwitchTriggered = true;
+                PlaceDeathBubbleForHostParry(p2, effect, 0f);
+                ParrySwitchOnParryPrePauseMethod.Invoke(parrySwitch, new object[] { p2 });
+                ParrySwitchOnParryPostPauseMethod.Invoke(parrySwitch, new object[] { p2 });
+                Log("Host routed the scripted Player Two jump/parry into Player One's death-bubble parry switch.");
+            }
+            catch (Exception ex)
+            {
+                Fail("Host could not activate Player One's death-bubble parry switch after Player Two jump/parry input: " + ex.Message + ".");
+            }
+        }
+
         static void CompleteDeathBubbleParryAnimation(PlayerDeathEffect effect)
         {
             if (effect == null || PlayerDeathEffectReviveParryAnimCompleteMethod == null)
@@ -1800,11 +2068,28 @@ namespace CupheadOnline.Sync
             }
         }
 
+        static void CompleteReverseDeathBubbleParryAnimation(PlayerDeathEffect effect)
+        {
+            if (effect == null || PlayerDeathEffectReviveParryAnimCompleteMethod == null)
+                return;
+
+            try
+            {
+                _hostReverseReviveAnimCompleteTriggered = true;
+                PlayerDeathEffectReviveParryAnimCompleteMethod.Invoke(effect, null);
+                Log("Host completed Player One's death-bubble parry animation callback after scripted Player Two jump/parry.");
+            }
+            catch (Exception ex)
+            {
+                Fail("Host could not complete Player One's death-bubble parry animation callback: " + ex.Message + ".");
+            }
+        }
+
         static bool ForceBuiltInPlayerDeath(LevelPlayerController player, string side)
         {
             if (player == null || player.stats == null)
             {
-                Fail("Cannot force built-in death on " + side + "; Player Two is missing.");
+                Fail("Cannot force built-in death on " + side + "; player is missing.");
                 return false;
             }
 
@@ -1832,7 +2117,7 @@ namespace CupheadOnline.Sync
 
                 if (!player.IsDead)
                 {
-                    Fail("Built-in death on " + side + " created a death bubble but Player Two is not dead.");
+                    Fail("Built-in death on " + side + " created a death bubble but " + player.id + " is not dead.");
                     return false;
                 }
 
@@ -1966,6 +2251,12 @@ namespace CupheadOnline.Sync
                 _clientReviveDeathForced = false;
                 _clientReviveMirrorVerified = false;
                 _clientReviveObservedSignalReceived = false;
+                _clientReverseReviveTestStartSignalReceived = false;
+                _clientReverseReviveDeathForced = false;
+                _clientReverseReviveMirrorVerified = false;
+                _clientReverseReviveObservedSignalReceived = false;
+                _clientReverseReviveJumpPressed = false;
+                _clientReverseReviveParryPressed = false;
                 _hostPausePressed = false;
                 _hostPauseObserved = false;
                 _hostUnpausePressed = false;
@@ -1977,6 +2268,14 @@ namespace CupheadOnline.Sync
                 _hostReviveSwitchTriggered = false;
                 _hostReviveAnimCompleteTriggered = false;
                 _hostReviveVerified = false;
+                _hostReviveForwardCompleteLogged = false;
+                _hostReverseReviveStartSignalSent = false;
+                _hostReverseReviveDeathForced = false;
+                _hostReverseReviveJumpPressed = false;
+                _hostReverseReviveParryPressed = false;
+                _hostReverseReviveSwitchTriggered = false;
+                _hostReverseReviveAnimCompleteTriggered = false;
+                _hostReverseReviveVerified = false;
                 _hostFightTimerResetAfterRevive = false;
                 _hostDialogueInteractPressed = false;
                 _hostDialogueForceStarted = false;
@@ -1985,10 +2284,17 @@ namespace CupheadOnline.Sync
                 _clientLevelReachedAt = 0f;
                 _clientFightReleasedAt = 0f;
                 _clientReviveDeathAt = 0f;
+                _clientReverseReviveDeathAt = 0f;
+                _clientReverseReviveJumpAt = 0f;
+                _clientReverseReviveParryAt = 0f;
                 _hostReviveDeathAt = 0f;
                 _hostReviveJumpAt = 0f;
                 _hostReviveParryAt = 0f;
                 _hostReviveVerifiedAt = 0f;
+                _hostReverseReviveDeathAt = 0f;
+                _hostReverseReviveJumpAt = 0f;
+                _hostReverseReviveParryAt = 0f;
+                _hostReverseReviveVerifiedAt = 0f;
                 _clientDialogueStartObservedAt = 0f;
                 _clientDialogueContinueObservedAt = 0f;
                 _clientDialogueLocalContinueAt = 0f;
