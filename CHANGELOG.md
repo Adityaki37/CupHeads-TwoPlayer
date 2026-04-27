@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.38 - 2026-04-27
+
+- Fixed guest-side Player Two revive mirroring when host and guest status ticks are independently ordered, so a host-observed local co-op revive is not dropped as stale.
+- Kept host authority over built-in Player One/Two status in two-player mode by ignoring guest status echoes on the host.
+- Expanded the LAN/Steam-emulation verifier to force a real Player Two death, run a scripted Player One jump/parry through the death-bubble revive path, and confirm the guest revives before the normal fight and pause checks.
+
 ## v1.2.37 - 2026-04-27
 
 - Mirrored host-observed Player Two revives back onto the guest through the existing authoritative PlayerStatus stream, keeping revive sync in the local co-op simulation model.

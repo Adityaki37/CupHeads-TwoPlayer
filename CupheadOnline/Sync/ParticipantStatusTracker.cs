@@ -42,9 +42,13 @@ namespace CupheadOnline.Sync
 
         static void Apply(PlayerStatusPacket pkt, bool fromRemote)
         {
+            if (ShouldIgnoreRemoteBuiltInStatus(pkt, fromRemote))
+                return;
+
             ParticipantStatus existing;
             if (_statuses.TryGetValue(pkt.ParticipantId, out existing)
-             && NetTick.IsOlder(pkt.Tick, existing.Tick))
+             && NetTick.IsOlder(pkt.Tick, existing.Tick)
+             && !ShouldAcceptRemoteHostBuiltInRevive(existing, pkt, fromRemote))
             {
                 return;
             }
@@ -68,6 +72,42 @@ namespace CupheadOnline.Sync
 
             if (fromRemote)
                 ApplyRemoteBuiltInStatus(pkt);
+        }
+
+        static bool ShouldIgnoreRemoteBuiltInStatus(PlayerStatusPacket pkt, bool fromRemote)
+        {
+            return fromRemote
+                && Plugin.VanillaTwoPlayerOnline
+                && MultiplayerSession.IsHost
+                && pkt.ParticipantId <= (byte)PlayerId.PlayerTwo;
+        }
+
+        static bool ShouldAcceptRemoteHostBuiltInRevive(
+            ParticipantStatus existing,
+            PlayerStatusPacket pkt,
+            bool fromRemote)
+        {
+            if (!fromRemote
+             || !Plugin.VanillaTwoPlayerOnline
+             || !MultiplayerSession.IsClient
+             || pkt.ParticipantId != (byte)MultiplayerSession.LocalId)
+            {
+                return false;
+            }
+
+            bool remoteSaysRevived = !pkt.IsDead && pkt.Health > 0;
+            if (!existing.IsDead || !remoteSaysRevived)
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[StatusSync] Accepting host revive status for local "
+                + MultiplayerSession.LocalId
+                + " despite independent local tick ordering: localTick="
+                + existing.Tick
+                + " hostTick="
+                + pkt.Tick
+                + ".");
+            return true;
         }
 
         public static bool TryGet(byte participantId, out ParticipantStatus status)

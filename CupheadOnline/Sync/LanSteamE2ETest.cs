@@ -43,6 +43,7 @@ namespace CupheadOnline.Sync
         const float FightDuration = 16f;
         const float DialogueTimeout = 10f;
         const float PauseTimeout = 8f;
+        const float ReviveSmokeTimeout = 12f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -59,6 +60,20 @@ namespace CupheadOnline.Sync
             typeof(MapLevelLoader).GetMethod("Activate", InstanceAny, null, new[] { typeof(MapPlayerController) }, null);
         static readonly MethodInfo MapDialogueStartSpeechBubbleMethod =
             typeof(MapDialogueInteraction).GetMethod("StartSpeechBubble", InstanceAny);
+        static readonly MethodInfo PlayerStatsOnStatsDeathMethod =
+            typeof(PlayerStatsManager).GetMethod("OnStatsDeath", InstanceAny);
+        static readonly MethodInfo LevelPlayerOnDeathMethod =
+            typeof(LevelPlayerController).GetMethod("OnDeath", InstanceAny);
+        static readonly FieldInfo PlayerDeathEffectPlayerIdField =
+            typeof(PlayerDeathEffect).GetField("playerId", InstanceAny);
+        static readonly FieldInfo PlayerDeathEffectParrySwitchField =
+            typeof(PlayerDeathEffect).GetField("parrySwitch", InstanceAny);
+        static readonly MethodInfo ParrySwitchOnParryPrePauseMethod =
+            typeof(ParrySwitch).GetMethod("OnParryPrePause", InstanceAny);
+        static readonly MethodInfo ParrySwitchOnParryPostPauseMethod =
+            typeof(ParrySwitch).GetMethod("OnParryPostPause", InstanceAny);
+        static readonly MethodInfo PlayerDeathEffectReviveParryAnimCompleteMethod =
+            typeof(PlayerDeathEffect).GetMethod("OnReviveParryAnimComplete", InstanceAny);
 
         static Stage _stage = Stage.Idle;
         static float _stageStartedAt;
@@ -84,15 +99,31 @@ namespace CupheadOnline.Sync
         static bool _clientUnpauseObserved;
         static bool _clientUnpauseSignalReceived;
         static bool _clientP2MapActivationBlocked;
+        static bool _clientReviveTestStartSignalReceived;
+        static bool _clientReviveDeathForced;
         static bool _clientReviveMirrorVerified;
+        static bool _clientReviveObservedSignalReceived;
         static bool _hostPausePressed;
         static bool _hostPauseObserved;
         static bool _hostUnpausePressed;
         static bool _hostUnpauseObserved;
+        static bool _hostReviveStartSignalSent;
+        static bool _hostReviveDeathForced;
+        static bool _hostReviveJumpPressed;
+        static bool _hostReviveParryPressed;
+        static bool _hostReviveSwitchTriggered;
+        static bool _hostReviveAnimCompleteTriggered;
+        static bool _hostReviveVerified;
+        static bool _hostFightTimerResetAfterRevive;
         static bool _hostDialogueInteractPressed;
         static bool _hostDialogueForceStarted;
         static bool _clientDialogueInteractPressed;
         static bool _clientDialogueAdvancePressed;
+        static float _clientReviveDeathAt;
+        static float _hostReviveDeathAt;
+        static float _hostReviveJumpAt;
+        static float _hostReviveParryAt;
+        static float _hostReviveVerifiedAt;
         static float _clientDialogueStartObservedAt;
         static float _clientDialogueContinueObservedAt;
         static float _clientDialogueLocalContinueAt;
@@ -233,6 +264,20 @@ namespace CupheadOnline.Sync
                     {
                         _clientUnpauseSignalReceived = true;
                         Log("Client reported synced resume.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EReviveTestStarted:
+                    if (MultiplayerSession.IsClient)
+                    {
+                        _clientReviveTestStartSignalReceived = true;
+                        Log("Received host built-in death/parry revive smoke start.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EReviveObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientReviveObservedSignalReceived = true;
+                        Log("Client reported mirrored built-in Player Two revive.");
                     }
                     return true;
                 default:
@@ -714,18 +759,23 @@ namespace CupheadOnline.Sync
 
         static void Fight()
         {
+            if (LevelStartSync.IsHostWaitingForGuestStart)
+            {
+                KeepScriptedPlayersAlive();
+                CheckRemoteInput();
+                _stageStartedAt = Time.unscaledTime;
+                return;
+            }
+
+            if (!RunHostBuiltInReviveSmoke())
+                return;
+
             KeepScriptedPlayersAlive();
             HoldHost(CupheadButton.Shoot);
             CheckRemoteInput();
             TrackHostShootingState(
                 PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController,
                 PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController);
-
-            if (LevelStartSync.IsHostWaitingForGuestStart)
-            {
-                _stageStartedAt = Time.unscaledTime;
-                return;
-            }
 
             if (!_hasFightStartBossHealth && Time.unscaledTime - _stageStartedAt > 1f)
             {
@@ -1023,7 +1073,7 @@ namespace CupheadOnline.Sync
 
             if (!_clientReviveMirrorVerified)
             {
-                VerifyClientReviveMirror(p2);
+                RunClientBuiltInReviveObserver(p2);
                 return;
             }
 
@@ -1519,41 +1569,301 @@ namespace CupheadOnline.Sync
             return true;
         }
 
-        static void VerifyClientReviveMirror(LevelPlayerController p2)
+        static bool RunHostBuiltInReviveSmoke()
         {
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (p1 == null || p1.stats == null || p2 == null || p2.stats == null)
+                return false;
+
+            RestoreScriptedPlayerHealth(p1);
+            CheckRemoteInput();
+            _hostAxis = Vector2.zero;
+            _hostButtons &= ~ButtonMask(CupheadButton.Shoot);
+
+            if (!_hostReviveStartSignalSent)
+            {
+                _hostReviveStartSignalSent = true;
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReviveTestStarted);
+                Log("Starting built-in death/parry revive smoke; client will put local Player Two into the same dead state.");
+            }
+
+            if (!_hostReviveDeathForced)
+            {
+                if (Time.unscaledTime - _stageStartedAt < 1.0f)
+                    return false;
+
+                if (!ForceBuiltInPlayerDeath(p2, "host"))
+                    return false;
+
+                _hostReviveDeathForced = true;
+                _hostReviveDeathAt = Time.unscaledTime;
+                Log("Host forced Player Two through the real level death path: " + DescribeLevelPlayer(p2) + ".");
+                CaptureScreen("host_revive_dead_" + SceneManager.GetActiveScene().name);
+                return false;
+            }
+
+            if (!_hostReviveVerified)
+            {
+                var effect = FindPlayerDeathEffect(PlayerId.PlayerTwo);
+                bool fullyRevived = !p2.IsDead
+                    && p2.stats.Health > 0
+                    && p2.gameObject.activeInHierarchy;
+
+                if (!fullyRevived)
+                {
+                    if (_hostReviveSwitchTriggered
+                     && !_hostReviveAnimCompleteTriggered
+                     && effect != null
+                     && Time.unscaledTime - _hostReviveParryAt > 0.45f)
+                    {
+                        CompleteDeathBubbleParryAnimation(effect);
+                    }
+
+                    if (effect == null && Time.unscaledTime - _hostReviveDeathAt > 1.5f)
+                    {
+                        Fail("Host Player Two death bubble disappeared before the jump/parry revive completed.");
+                        return false;
+                    }
+
+                    if (effect != null)
+                        DriveHostJumpParryRevive(p1, effect);
+
+                    if (_hostReviveParryPressed && Time.unscaledTime - _hostReviveParryAt > ReviveSmokeTimeout)
+                    {
+                        Fail("Host Player One jump/parry did not revive Player Two through the built-in death bubble.");
+                        return false;
+                    }
+
+                    return false;
+                }
+
+                _hostReviveVerified = true;
+                _hostReviveVerifiedAt = Time.unscaledTime;
+                ParticipantStatusTracker.PushLocalStatus(p2);
+                Log("Host verified built-in jump/parry revive: " + DescribeLevelPlayer(p2) + ".");
+                CaptureScreen("host_revive_complete_" + SceneManager.GetActiveScene().name);
+                return false;
+            }
+
+            if (!_clientReviveObservedSignalReceived)
+            {
+                if (Time.unscaledTime - _hostReviveVerifiedAt > ReviveSmokeTimeout)
+                {
+                    Fail("Client did not report Player Two revived after the host built-in parry revive.");
+                    return false;
+                }
+
+                return false;
+            }
+
+            if (!_hostFightTimerResetAfterRevive)
+            {
+                _hostFightTimerResetAfterRevive = true;
+                _stageStartedAt = Time.unscaledTime;
+                _lastLogAt = -100f;
+                Log("Built-in death/parry revive verified on both peers; starting fight damage window.");
+            }
+
+            return true;
+        }
+
+        static void RunClientBuiltInReviveObserver(LevelPlayerController p2)
+        {
+            if (!_clientReviveTestStartSignalReceived)
+                return;
+
             if (p2 == null || p2.stats == null)
             {
-                Fail("Cannot verify client revive mirror; Player Two is missing.");
+                Fail("Cannot verify client built-in revive mirror; Player Two is missing.");
                 return;
             }
 
-            int maxHealth = Mathf.Max(1, p2.stats.HealthMax);
-            p2.stats.SetHealth(0);
-            if (!p2.IsDead)
+            if (!_clientReviveDeathForced)
             {
-                Fail("Cannot verify client revive mirror; Player Two did not enter dead state.");
+                if (!ForceBuiltInPlayerDeath(p2, "client"))
+                    return;
+
+                _clientReviveDeathForced = true;
+                _clientReviveDeathAt = Time.unscaledTime;
+                Log("Client forced local Player Two through the real level death path; waiting for host parry status.");
+                CaptureScreen("client_revive_dead_" + SceneManager.GetActiveScene().name);
                 return;
             }
 
-            var pkt = new PlayerStatusPacket
+            bool fullyRevived = !p2.IsDead
+                && p2.stats.Health > 0
+                && p2.gameObject.activeInHierarchy;
+            if (!fullyRevived)
             {
-                ParticipantId = (byte)PlayerId.PlayerTwo,
-                Health = 1,
-                HealthMax = (byte)Mathf.Clamp(maxHealth, 1, 255),
-                Flags = 2,
-                Tick = MultiplayerSession.Tick + 60000u,
-            };
-
-            ParticipantStatusTracker.Apply(pkt);
-
-            if (p2.IsDead || p2.stats.Health <= 0)
-            {
-                Fail("Client did not mirror host Player Two revive from status packet.");
+                if (Time.unscaledTime - _clientReviveDeathAt > ReviveSmokeTimeout)
+                    Fail("Client Player Two stayed dead after the host built-in parry revive.");
                 return;
             }
 
             _clientReviveMirrorVerified = true;
-            Log("Verified client mirrored host Player Two revive from PlayerStatus.");
+            _clientFightReleasedAt = Time.unscaledTime;
+            Log("Verified client Player Two revived from the host built-in parry status: " + DescribeLevelPlayer(p2) + ".");
+            CaptureScreen("client_revive_complete_" + SceneManager.GetActiveScene().name);
+            SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReviveObserved);
+        }
+
+        static void DriveHostJumpParryRevive(LevelPlayerController p1, PlayerDeathEffect effect)
+        {
+            if (p1 == null || effect == null)
+                return;
+
+            if (!_hostReviveJumpPressed)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, 70f);
+                if (Time.unscaledTime - _hostReviveDeathAt <= 0.35f)
+                    return;
+
+                _hostReviveJumpPressed = true;
+                _hostReviveJumpAt = Time.unscaledTime;
+                PressHost(CupheadButton.Jump);
+                Log("Host pressed Player One jump for built-in death-bubble revive test.");
+                return;
+            }
+
+            if (!_hostReviveParryPressed)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, 35f);
+                if (Time.unscaledTime - _hostReviveJumpAt <= 0.24f)
+                    return;
+
+                _hostReviveParryPressed = true;
+                _hostReviveParryAt = Time.unscaledTime;
+                PressHost(CupheadButton.Jump);
+                Log("Host pressed Player One second jump/parry against Player Two's death bubble.");
+                return;
+            }
+
+            if (Time.unscaledTime - _hostReviveParryAt <= 1.25f)
+                PlaceDeathBubbleForHostParry(p1, effect, 0f);
+
+            if (!_hostReviveSwitchTriggered && Time.unscaledTime - _hostReviveParryAt > 0.12f)
+                TriggerDeathBubbleParrySwitch(p1, effect);
+        }
+
+        static void PlaceDeathBubbleForHostParry(LevelPlayerController p1, PlayerDeathEffect effect, float yOffset)
+        {
+            if (p1 == null || effect == null)
+                return;
+
+            effect.transform.position = p1.center + new Vector3(0f, yOffset, 0f);
+        }
+
+        static void TriggerDeathBubbleParrySwitch(LevelPlayerController p1, PlayerDeathEffect effect)
+        {
+            if (p1 == null || effect == null)
+                return;
+            if (PlayerDeathEffectParrySwitchField == null
+             || ParrySwitchOnParryPrePauseMethod == null
+             || ParrySwitchOnParryPostPauseMethod == null)
+            {
+                return;
+            }
+
+            var parrySwitch = PlayerDeathEffectParrySwitchField.GetValue(effect) as PlayerDeathParrySwitch;
+            if (parrySwitch == null)
+                return;
+
+            try
+            {
+                _hostReviveSwitchTriggered = true;
+                PlaceDeathBubbleForHostParry(p1, effect, 0f);
+                ParrySwitchOnParryPrePauseMethod.Invoke(parrySwitch, new object[] { p1 });
+                ParrySwitchOnParryPostPauseMethod.Invoke(parrySwitch, new object[] { p1 });
+                Log("Host routed the scripted Player One jump/parry into Player Two's death-bubble parry switch.");
+            }
+            catch (Exception ex)
+            {
+                Fail("Host could not activate Player Two's death-bubble parry switch after jump/parry input: " + ex.Message + ".");
+            }
+        }
+
+        static void CompleteDeathBubbleParryAnimation(PlayerDeathEffect effect)
+        {
+            if (effect == null || PlayerDeathEffectReviveParryAnimCompleteMethod == null)
+                return;
+
+            try
+            {
+                _hostReviveAnimCompleteTriggered = true;
+                PlayerDeathEffectReviveParryAnimCompleteMethod.Invoke(effect, null);
+                Log("Host completed Player Two's death-bubble parry animation callback after scripted jump/parry.");
+            }
+            catch (Exception ex)
+            {
+                Fail("Host could not complete Player Two's death-bubble parry animation callback: " + ex.Message + ".");
+            }
+        }
+
+        static bool ForceBuiltInPlayerDeath(LevelPlayerController player, string side)
+        {
+            if (player == null || player.stats == null)
+            {
+                Fail("Cannot force built-in death on " + side + "; Player Two is missing.");
+                return false;
+            }
+
+            var existing = FindPlayerDeathEffect(player.id);
+            if (player.IsDead && existing != null)
+                return true;
+
+            try
+            {
+                player.stats.SetHealth(0);
+
+                if (PlayerStatsOnStatsDeathMethod != null)
+                    PlayerStatsOnStatsDeathMethod.Invoke(player.stats, null);
+
+                existing = FindPlayerDeathEffect(player.id);
+                if (existing == null && LevelPlayerOnDeathMethod != null)
+                    LevelPlayerOnDeathMethod.Invoke(player, new object[] { player.id });
+
+                existing = FindPlayerDeathEffect(player.id);
+                if (existing == null)
+                {
+                    Fail("Built-in death on " + side + " did not create a PlayerDeathEffect.");
+                    return false;
+                }
+
+                if (!player.IsDead)
+                {
+                    Fail("Built-in death on " + side + " created a death bubble but Player Two is not dead.");
+                    return false;
+                }
+
+                ParticipantStatusTracker.PushLocalStatus(player);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Fail("Built-in death on " + side + " threw: " + ex.Message + ".");
+                return false;
+            }
+        }
+
+        static PlayerDeathEffect FindPlayerDeathEffect(PlayerId playerId)
+        {
+            if (PlayerDeathEffectPlayerIdField == null)
+                return null;
+
+            var effects = UnityEngine.Object.FindObjectsOfType<PlayerDeathEffect>();
+            for (int i = 0; i < effects.Length; i++)
+            {
+                var effect = effects[i];
+                if (effect == null)
+                    continue;
+
+                object raw = PlayerDeathEffectPlayerIdField.GetValue(effect);
+                if (raw is PlayerId && (PlayerId)raw == playerId)
+                    return effect;
+            }
+
+            return null;
         }
 
         static bool IsAnyStartUiActive()
@@ -1652,17 +1962,33 @@ namespace CupheadOnline.Sync
                 _clientUnpauseObserved = false;
                 _clientUnpauseSignalReceived = false;
                 _clientP2MapActivationBlocked = false;
+                _clientReviveTestStartSignalReceived = false;
+                _clientReviveDeathForced = false;
                 _clientReviveMirrorVerified = false;
+                _clientReviveObservedSignalReceived = false;
                 _hostPausePressed = false;
                 _hostPauseObserved = false;
                 _hostUnpausePressed = false;
                 _hostUnpauseObserved = false;
+                _hostReviveStartSignalSent = false;
+                _hostReviveDeathForced = false;
+                _hostReviveJumpPressed = false;
+                _hostReviveParryPressed = false;
+                _hostReviveSwitchTriggered = false;
+                _hostReviveAnimCompleteTriggered = false;
+                _hostReviveVerified = false;
+                _hostFightTimerResetAfterRevive = false;
                 _hostDialogueInteractPressed = false;
                 _hostDialogueForceStarted = false;
                 _clientDialogueInteractPressed = false;
                 _clientDialogueAdvancePressed = false;
                 _clientLevelReachedAt = 0f;
                 _clientFightReleasedAt = 0f;
+                _clientReviveDeathAt = 0f;
+                _hostReviveDeathAt = 0f;
+                _hostReviveJumpAt = 0f;
+                _hostReviveParryAt = 0f;
+                _hostReviveVerifiedAt = 0f;
                 _clientDialogueStartObservedAt = 0f;
                 _clientDialogueContinueObservedAt = 0f;
                 _clientDialogueLocalContinueAt = 0f;
