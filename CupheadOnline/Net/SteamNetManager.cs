@@ -2575,9 +2575,45 @@ namespace CupheadOnline.Net
                 _lastFailureReason = status;
             FireStatus(status);
             Plugin.Log.LogInfo("[SteamNet] → " + s + ": " + status);
+            LogPairEvent("state", s + " | " + status);
         }
 
         void FireStatus(string msg) => OnStatusChanged?.Invoke(msg);
+
+        void LogPairEvent(string eventName, string detail)
+        {
+            string lobby = CurrentLobbyId;
+            if (string.IsNullOrEmpty(lobby))
+                lobby = "(none)";
+
+            string peer = _peerId == CSteamID.Nil
+                ? "(none)"
+                : FriendName(_peerId) + "[" + _peerId.m_SteamID + "]";
+
+            Plugin.Log.LogInfo("[PairLog] utc=" + DateTime.UtcNow.ToString("o")
+                + " role=" + (_isHost ? "host" : "guest")
+                + " key=" + BuildPairingKeyForLog()
+                + " state=" + _state
+                + " lobby=" + OneLine(lobby)
+                + " peer=" + OneLine(peer)
+                + " event=" + OneLine(eventName)
+                + " detail=" + OneLine(detail));
+        }
+
+        string BuildPairingKeyForLog()
+        {
+            string lobby = CurrentLobbyId;
+            if (string.IsNullOrEmpty(lobby))
+                return "no-lobby-" + _state;
+            return (_lanActive ? "lan-" : "steam-lobby-") + lobby;
+        }
+
+        static string OneLine(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "(empty)";
+            return value.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
+        }
 
         string FriendName(CSteamID id)
         {

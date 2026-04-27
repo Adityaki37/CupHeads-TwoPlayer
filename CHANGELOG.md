@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.34 - 2026-04-27
+
+- Added paired bug-report metadata so host and guest exports include the same lobby/session pairing key, role, network state, peer, and export time.
+- Added timestamped `[PairLog]` entries for network state changes, making host and guest connection timelines easier to line up after a real Steam run.
+- Added `tools/pair-cuphead-reports.ps1` to merge two exported report folders into a paired summary and filtered high-signal logs.
+
 ## v1.2.33 - 2026-04-27
 
 - Synced the host's in-level pause menu state to the guest through reliable session snapshots, using Cuphead's normal `LevelPauseGUI` open/close path on the guest.

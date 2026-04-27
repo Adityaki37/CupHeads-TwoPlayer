@@ -179,6 +179,18 @@ Two-window testing note:
 2. Use two Windows users/Steam accounts or a second PC for true P2P testing.
 3. If the Dev Lab fails to spawn or control Player Two, the bug is in local spawn/input routing. If Dev Lab works but Steam multiplayer fails, the bug is probably lobby, packet, or scene-sync related.
 
+## Paired Bug Reports
+
+Both players can export matching reports from the multiplayer lobby with `EXPORT BUG REPORT` after a shared run. Each exported folder contains `pairing.txt`, `diagnostics.txt`, and `LogOutput.log`; reports from the same lobby share the same `Pairing Key`.
+
+To merge both sides locally:
+
+```powershell
+.\tools\pair-cuphead-reports.ps1 -ReportA "C:\path\to\host-report" -ReportB "C:\path\to\guest-report"
+```
+
+The script writes a paired summary plus filtered high-signal logs. CupHeads v1.2.34 and newer also adds timestamped `[PairLog]` entries for network state changes, which makes the host and guest timelines easier to line up.
+
 ## Authority Model
 
 CupHeads uses a hybrid co-op model. The host remains authoritative for world state: saves, scene transitions, level starts, boss/enemy state, RNG seeds, progression, retries, and menu flow. For player feel, `Networking.LatencyFriendlyDamage` is enabled by default so each peer owns damage to their own player body. In practical terms, a guest who dodges on their own screen should not lose HP purely because the host saw an older lagged position.
