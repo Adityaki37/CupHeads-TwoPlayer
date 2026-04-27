@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.37 - 2026-04-27
+
+- Mirrored host-observed Player Two revives back onto the guest through the existing authoritative PlayerStatus stream, keeping revive sync in the local co-op simulation model.
+- Blocked map level/shop/world-transition activations unless they come from host Player One, preventing guest/P2 level clicks from opening a local start card or desyncing scene flow.
+- Added concise status/revive/map-authority log lines so paired reports show death, revive, and blocked interaction timing.
+
 ## v1.2.36 - 2026-04-27
 
 - Normalized LAN paired-report keys so same-PC host/client test reports pair under one shared session key instead of using each side's local address.

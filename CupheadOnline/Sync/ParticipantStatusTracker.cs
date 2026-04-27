@@ -37,6 +37,11 @@ namespace CupheadOnline.Sync
 
         public static void Apply(PlayerStatusPacket pkt)
         {
+            Apply(pkt, fromRemote: true);
+        }
+
+        static void Apply(PlayerStatusPacket pkt, bool fromRemote)
+        {
             ParticipantStatus existing;
             if (_statuses.TryGetValue(pkt.ParticipantId, out existing)
              && NetTick.IsOlder(pkt.Tick, existing.Tick))
@@ -57,7 +62,12 @@ namespace CupheadOnline.Sync
                 Tick = pkt.Tick,
             };
 
-            ApplyRemoteBuiltInStatus(pkt);
+            LogStatusTransition(existing, pkt, fromRemote);
+            if (fromRemote && ParticipantReviveController.TryMirrorHostBuiltInRevive(pkt))
+                return;
+
+            if (fromRemote)
+                ApplyRemoteBuiltInStatus(pkt);
         }
 
         public static bool TryGet(byte participantId, out ParticipantStatus status)
@@ -132,7 +142,7 @@ namespace CupheadOnline.Sync
             if (!TryBuildLocalPacket(player, out pkt))
                 return;
 
-            Apply(pkt);
+            Apply(pkt, fromRemote: false);
         }
 
         public static void CaptureLocal(PlayerId playerId)
@@ -146,9 +156,40 @@ namespace CupheadOnline.Sync
             if (!TryBuildLocalPacket(player, out pkt))
                 return;
 
-            Apply(pkt);
+            Apply(pkt, fromRemote: false);
             if (Plugin.Net != null && Plugin.Net.IsConnected && MultiplayerSession.IsActive)
                 Plugin.Net.SendPlayerStatus(ref pkt);
+        }
+
+        static void LogStatusTransition(ParticipantStatus existing, PlayerStatusPacket pkt, bool fromRemote)
+        {
+            if (pkt.ParticipantId > (byte)PlayerId.PlayerTwo)
+                return;
+            if (!existing.IsKnown)
+                return;
+            if (existing.IsDead == pkt.IsDead)
+                return;
+
+            Plugin.Log.LogInfo(
+                "[StatusSync] Status change P"
+                + (pkt.ParticipantId + 1)
+                + " hp="
+                + existing.Health
+                + "/"
+                + existing.HealthMax
+                + " dead="
+                + existing.IsDead
+                + " -> hp="
+                + pkt.Health
+                + "/"
+                + pkt.HealthMax
+                + " dead="
+                + pkt.IsDead
+                + " tick="
+                + pkt.Tick
+                + " source="
+                + (fromRemote ? "remote" : "local")
+                + ".");
         }
 
         public static bool TryGetPosition(byte participantId, out Vector2 position)

@@ -281,6 +281,12 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerEndSyncPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(MapDialogueInteractionClientGuardPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(MapDialogueInteractionStartSpeechBubbleSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapLevelLoaderAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapSceneLoaderAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapShopLoaderAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapTutorialLoaderAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapBakeryLoaderAuthorityPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapDiceGateSceneLoaderAuthorityPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(RobotLevelRobotHeadPrimaryPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(ChessKnightLevelInitPatch3P));
             PatchTracked(harmony, registeredPatchTypes, typeof(ChessKnightCheckTauntPatch3P));
@@ -522,6 +528,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.36";
+        public const string VERSION = "1.2.37";
     }
 }

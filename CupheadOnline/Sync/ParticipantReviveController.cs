@@ -146,6 +146,37 @@ namespace CupheadOnline.Sync
                 ApplyLocalRevive(localPlayerId, new Vector2(pkt.RevivePosX, pkt.RevivePosY));
         }
 
+        public static bool TryMirrorHostBuiltInRevive(PlayerStatusPacket pkt)
+        {
+            if (!MultiplayerSession.IsActive || !MultiplayerSession.IsClient)
+                return false;
+            if (pkt.ParticipantId != (byte)MultiplayerSession.LocalId)
+                return false;
+            if (pkt.IsDead || pkt.Health <= 0)
+                return false;
+
+            var player = GetPlayerSafe(MultiplayerSession.LocalId);
+            if (player == null || !player.IsDead)
+                return false;
+
+            Vector2 revivePosition;
+            if (!TryGetHostRevivePosition((PlayerId)pkt.ParticipantId, out revivePosition))
+                revivePosition = player.center;
+
+            ApplyLocalRevive(MultiplayerSession.LocalId, revivePosition);
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Mirrored host revive for "
+                + MultiplayerSession.LocalId
+                + " from status tick "
+                + pkt.Tick
+                + " at ("
+                + revivePosition.x.ToString("0.00")
+                + ","
+                + revivePosition.y.ToString("0.00")
+                + ").");
+            return true;
+        }
+
         static void SendGrantToRemoteOwner(
             SteamNetManager net,
             byte ownerParticipantId,
@@ -207,6 +238,26 @@ namespace CupheadOnline.Sync
                 Object.Destroy(deathEffect.gameObject);
 
             ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static bool TryGetHostRevivePosition(PlayerId playerId, out Vector2 position)
+        {
+            PlayerStatePacket snapshot;
+            if (RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+            {
+                position = new Vector2(snapshot.PosX, snapshot.PosY);
+                return true;
+            }
+
+            var deathEffect = FindLocalDeathEffect(playerId);
+            if (deathEffect != null)
+            {
+                position = deathEffect.transform.position;
+                return true;
+            }
+
+            position = Vector2.zero;
+            return false;
         }
 
         static bool MarkGrantApplied(ReviveGrantPacket pkt)

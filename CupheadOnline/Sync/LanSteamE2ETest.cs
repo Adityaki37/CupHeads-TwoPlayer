@@ -83,6 +83,8 @@ namespace CupheadOnline.Sync
         static bool _clientPauseSignalReceived;
         static bool _clientUnpauseObserved;
         static bool _clientUnpauseSignalReceived;
+        static bool _clientP2MapActivationBlocked;
+        static bool _clientReviveMirrorVerified;
         static bool _hostPausePressed;
         static bool _hostPauseObserved;
         static bool _hostUnpausePressed;
@@ -448,6 +450,9 @@ namespace CupheadOnline.Sync
                 + "; P2=" + DescribeMapPlayer(p2)
                 + "; P2 networkControlled=" + MultiplayerSession.IsNetworkControlledPlayer(PlayerId.PlayerTwo)
                 + "; target=" + _targetLevel + ".");
+
+            if (!VerifyP2MapActivationBlocked(_targetLoader, p2, "host"))
+                return;
             CaptureScreen("host_map_" + _targetLevel);
             SetStage(Stage.WalkToBoss, "Walking to " + _targetLevel + ".");
         }
@@ -901,6 +906,15 @@ namespace CupheadOnline.Sync
                 _clientCapturedMap = true;
                 Log("Client map sync: " + DescribeClientMapPlayers() + ".");
                 CaptureScreen("client_map_" + sceneName);
+
+                if (!_clientP2MapActivationBlocked)
+                {
+                    var loader = ChooseNearestBossLoader(Map.Current.players[0].transform.position);
+                    var p2Map = Map.Current.players.Length > 1 ? Map.Current.players[1] : null;
+                    if (!VerifyP2MapActivationBlocked(loader, p2Map, "client"))
+                        return;
+                    _clientP2MapActivationBlocked = true;
+                }
             }
 
             if (IsMapDialogueSmokeTarget() && sceneName.StartsWith("scene_map_world", StringComparison.Ordinal))
@@ -1006,6 +1020,12 @@ namespace CupheadOnline.Sync
 
             if (_clientFightReleasedAt <= 0f)
                 _clientFightReleasedAt = Time.unscaledTime;
+
+            if (!_clientReviveMirrorVerified)
+            {
+                VerifyClientReviveMirror(p2);
+                return;
+            }
 
             TrackClientShootingState(p2);
 
@@ -1472,6 +1492,70 @@ namespace CupheadOnline.Sync
             MapLevelLoaderActivateMethod.Invoke(_targetLoader, new object[] { player });
         }
 
+        static bool VerifyP2MapActivationBlocked(MapLevelLoader loader, MapPlayerController player, string side)
+        {
+            if (loader == null || player == null || MapLevelLoaderActivateMethod == null)
+            {
+                Fail("Cannot verify P2 map activation block on " + side + "; missing loader/player/reflection method.");
+                return false;
+            }
+
+            bool wasActiveBefore = IsAnyStartUiActive();
+            if (wasActiveBefore)
+            {
+                Fail("Cannot verify P2 map activation block on " + side + "; start UI was already active.");
+                return false;
+            }
+
+            MapLevelLoaderActivateMethod.Invoke(loader, new object[] { player });
+
+            if (IsAnyStartUiActive())
+            {
+                Fail("Player Two opened a map start card on " + side + "; map authority guard failed.");
+                return false;
+            }
+
+            Log("Verified Player Two map activation is blocked on " + side + ".");
+            return true;
+        }
+
+        static void VerifyClientReviveMirror(LevelPlayerController p2)
+        {
+            if (p2 == null || p2.stats == null)
+            {
+                Fail("Cannot verify client revive mirror; Player Two is missing.");
+                return;
+            }
+
+            int maxHealth = Mathf.Max(1, p2.stats.HealthMax);
+            p2.stats.SetHealth(0);
+            if (!p2.IsDead)
+            {
+                Fail("Cannot verify client revive mirror; Player Two did not enter dead state.");
+                return;
+            }
+
+            var pkt = new PlayerStatusPacket
+            {
+                ParticipantId = (byte)PlayerId.PlayerTwo,
+                Health = 1,
+                HealthMax = (byte)Mathf.Clamp(maxHealth, 1, 255),
+                Flags = 2,
+                Tick = MultiplayerSession.Tick + 60000u,
+            };
+
+            ParticipantStatusTracker.Apply(pkt);
+
+            if (p2.IsDead || p2.stats.Health <= 0)
+            {
+                Fail("Client did not mirror host Player Two revive from status packet.");
+                return;
+            }
+
+            _clientReviveMirrorVerified = true;
+            Log("Verified client mirrored host Player Two revive from PlayerStatus.");
+        }
+
         static bool IsAnyStartUiActive()
         {
             return (MapDifficultySelectStartUI.Current != null && MapDifficultySelectStartUI.Current.CurrentState == AbstractMapSceneStartUI.State.Active)
@@ -1567,6 +1651,8 @@ namespace CupheadOnline.Sync
                 _clientPauseSignalReceived = false;
                 _clientUnpauseObserved = false;
                 _clientUnpauseSignalReceived = false;
+                _clientP2MapActivationBlocked = false;
+                _clientReviveMirrorVerified = false;
                 _hostPausePressed = false;
                 _hostPauseObserved = false;
                 _hostUnpausePressed = false;
