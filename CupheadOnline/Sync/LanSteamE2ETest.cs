@@ -31,6 +31,7 @@ namespace CupheadOnline.Sync
             OpenStartCard,
             WaitLevel,
             Fight,
+            PauseSync,
             ClientObserve,
             Done,
             Failed,
@@ -41,6 +42,7 @@ namespace CupheadOnline.Sync
         const float LevelTimeout = 30f;
         const float FightDuration = 16f;
         const float DialogueTimeout = 10f;
+        const float PauseTimeout = 8f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -77,6 +79,14 @@ namespace CupheadOnline.Sync
         static bool _remoteCheckpointReceived;
         static bool _clientDialogueStartedObserved;
         static bool _clientDialogueContinueObserved;
+        static bool _clientPauseObserved;
+        static bool _clientPauseSignalReceived;
+        static bool _clientUnpauseObserved;
+        static bool _clientUnpauseSignalReceived;
+        static bool _hostPausePressed;
+        static bool _hostPauseObserved;
+        static bool _hostUnpausePressed;
+        static bool _hostUnpauseObserved;
         static bool _hostDialogueInteractPressed;
         static bool _hostDialogueForceStarted;
         static bool _clientDialogueInteractPressed;
@@ -85,6 +95,10 @@ namespace CupheadOnline.Sync
         static float _clientDialogueContinueObservedAt;
         static float _clientDialogueLocalContinueAt;
         static float _hostDialogueContinueObservedAt;
+        static float _clientPauseObservedAt;
+        static float _hostPauseObservedAt;
+        static float _clientUnpauseObservedAt;
+        static float _hostUnpauseObservedAt;
         static float _clientLevelReachedAt;
         static float _clientFightReleasedAt;
         static bool _hasFightStartBossHealth;
@@ -163,6 +177,9 @@ namespace CupheadOnline.Sync
                     case Stage.Fight:
                         Fight();
                         break;
+                    case Stage.PauseSync:
+                        PauseSync();
+                        break;
                     case Stage.ClientObserve:
                         ClientObserve();
                         break;
@@ -200,6 +217,20 @@ namespace CupheadOnline.Sync
                     {
                         _clientDialogueContinueObserved = true;
                         Log("Client reported map dialogue continue sync.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EPauseObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientPauseSignalReceived = true;
+                        Log("Client reported synced pause menu.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EUnpauseObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientUnpauseSignalReceived = true;
+                        Log("Client reported synced resume.");
                     }
                     return true;
                 default:
@@ -776,10 +807,82 @@ namespace CupheadOnline.Sync
             }
 
             ResetScriptedInput();
-            SendHostCheckpointSignal();
-            Time.timeScale = 0f;
-            SetStage(Stage.Done, "PASS.");
-            Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+            SetStage(Stage.PauseSync, "Opening pause menu to verify host pause sync.");
+        }
+
+        static void PauseSync()
+        {
+            KeepScriptedPlayersAlive();
+            CheckRemoteInput();
+            _hostAxis = Vector2.zero;
+
+            if (!_hostPausePressed && Time.unscaledTime - _stageStartedAt > 0.25f)
+            {
+                _hostPausePressed = true;
+                PressHost(CupheadButton.Pause);
+                Log("Host pressed pause to open the level pause menu.");
+            }
+
+            if (IsLevelPauseMenuOpen())
+            {
+                if (!_hostPauseObserved)
+                {
+                    _hostPauseObserved = true;
+                    _hostPauseObservedAt = Time.unscaledTime;
+                    Log("Host pause menu observed; waiting for client pause sync.");
+                    CaptureScreen("host_pause_sync_" + SceneManager.GetActiveScene().name);
+                    SessionSync.BroadcastSessionSnapshot(true);
+                }
+
+                if (_clientPauseSignalReceived)
+                {
+                    if (!_hostUnpausePressed && Time.unscaledTime - _hostPauseObservedAt > 0.5f)
+                    {
+                        _hostUnpausePressed = true;
+                        PressHost(CupheadButton.Pause);
+                        Log("Host pressed pause again to resume.");
+                    }
+                }
+
+                if (_hostPauseObservedAt > 0f && Time.unscaledTime - _hostPauseObservedAt > PauseTimeout)
+                {
+                    Fail(_clientPauseSignalReceived
+                        ? "Host did not resume after the second pause press."
+                        : "Client did not report the synced host pause menu.");
+                    return;
+                }
+            }
+
+            if (_hostUnpausePressed
+             && !_hostUnpauseObserved
+             && IsLevelPauseMenuClosed())
+            {
+                _hostUnpauseObserved = true;
+                _hostUnpauseObservedAt = Time.unscaledTime;
+                Log("Host resume observed; waiting for client resume sync.");
+                SessionSync.BroadcastSessionSnapshot(true);
+            }
+
+            if (_hostUnpauseObserved)
+            {
+                if (_clientUnpauseSignalReceived)
+                {
+                    SendHostCheckpointSignal();
+                    Time.timeScale = 0f;
+                    SetStage(Stage.Done, "PAUSE/RESUME SYNC PASS.");
+                    Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+                    return;
+                }
+
+                if (_hostUnpauseObservedAt > 0f && Time.unscaledTime - _hostUnpauseObservedAt > PauseTimeout)
+                {
+                    Fail("Client did not report synced resume.");
+                    return;
+                }
+            }
+
+            if (!_hostPauseObserved && TimedOut(PauseTimeout))
+                Fail("Host did not enter the level pause menu after pressing pause.");
         }
 
         static void ClientObserve()
@@ -874,6 +977,26 @@ namespace CupheadOnline.Sync
                 CaptureScreen("client_level_" + sceneName);
             }
 
+            if (!_clientPauseObserved && IsLevelPauseMenuOpen())
+            {
+                _clientPauseObserved = true;
+                _clientPauseObservedAt = Time.unscaledTime;
+                Log("Client observed synced host pause menu.");
+                CaptureScreen("client_pause_sync_" + sceneName);
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EPauseObserved);
+            }
+
+            if (_clientPauseObserved
+             && !_clientUnpauseObserved
+             && IsLevelPauseMenuClosed()
+             && Time.unscaledTime - _clientPauseObservedAt > 0.25f)
+            {
+                _clientUnpauseObserved = true;
+                _clientUnpauseObservedAt = Time.unscaledTime;
+                Log("Client observed synced resume.");
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EUnpauseObserved);
+            }
+
             if (LevelStartSync.IsClientWaitingForStartRelease
              || (Time.timeScale == 0f && PauseManager.state != PauseManager.State.Paused))
             {
@@ -904,10 +1027,27 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            if (!_remoteCheckpointReceived && _clientFightReleasedAt > 0f && Time.unscaledTime - _clientFightReleasedAt < FightDuration)
+            bool fightWindowComplete = _remoteCheckpointReceived
+                || (_clientFightReleasedAt > 0f && Time.unscaledTime - _clientFightReleasedAt >= FightDuration);
+            if (!fightWindowComplete)
                 return;
 
-            Log((_remoteCheckpointReceived ? "Client host-checkpoint sync complete" : "Client fight sync complete")
+            if (!_clientPauseObserved)
+            {
+                if (_clientFightReleasedAt > 0f
+                 && Time.unscaledTime - _clientFightReleasedAt > FightDuration + PauseTimeout + 4f)
+                    Fail("Client did not observe the synced host pause menu.");
+                return;
+            }
+
+            if (!_clientUnpauseObserved)
+            {
+                if (_clientPauseObservedAt > 0f && Time.unscaledTime - _clientPauseObservedAt > PauseTimeout + 4f)
+                    Fail("Client observed the pause menu but did not observe synced resume.");
+                return;
+            }
+
+            Log((_remoteCheckpointReceived ? "Client host-checkpoint pause/resume sync complete" : "Client pause/resume sync complete")
                 + ": P1=" + DescribeLevelPlayer(p1)
                 + "; P2=" + DescribeLevelPlayer(p2)
                 + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
@@ -984,6 +1124,22 @@ namespace CupheadOnline.Sync
             {
                 return false;
             }
+        }
+
+        static bool IsLevelPauseMenuOpen()
+        {
+            var gui = UnityEngine.Object.FindObjectOfType<LevelPauseGUI>();
+            return gui != null
+                && PauseManager.state == PauseManager.State.Paused
+                && gui.state == AbstractPauseGUI.State.Paused;
+        }
+
+        static bool IsLevelPauseMenuClosed()
+        {
+            var gui = UnityEngine.Object.FindObjectOfType<LevelPauseGUI>();
+            return gui != null
+                && PauseManager.state == PauseManager.State.Unpaused
+                && gui.state == AbstractPauseGUI.State.Unpaused;
         }
 
         static void RestoreScriptedPlayerHealth(LevelPlayerController player)
@@ -1356,14 +1512,16 @@ namespace CupheadOnline.Sync
         {
             if (_hostDownButtons != 0u && Time.frameCount > _hostDownUntilFrame)
             {
+                uint released = _hostDownButtons;
                 _hostDownButtons = 0u;
-                _hostButtons &= ~ButtonMask(CupheadButton.Accept);
+                _hostButtons &= ~released;
             }
 
             if (_clientDownButtons != 0u && Time.frameCount > _clientDownUntilFrame)
             {
+                uint released = _clientDownButtons;
                 _clientDownButtons = 0u;
-                _clientButtons &= ~ButtonMask(CupheadButton.Accept);
+                _clientButtons &= ~released;
             }
         }
 
@@ -1405,6 +1563,14 @@ namespace CupheadOnline.Sync
                 _remoteCheckpointReceived = false;
                 _clientDialogueStartedObserved = false;
                 _clientDialogueContinueObserved = false;
+                _clientPauseObserved = false;
+                _clientPauseSignalReceived = false;
+                _clientUnpauseObserved = false;
+                _clientUnpauseSignalReceived = false;
+                _hostPausePressed = false;
+                _hostPauseObserved = false;
+                _hostUnpausePressed = false;
+                _hostUnpauseObserved = false;
                 _hostDialogueInteractPressed = false;
                 _hostDialogueForceStarted = false;
                 _clientDialogueInteractPressed = false;
@@ -1415,6 +1581,10 @@ namespace CupheadOnline.Sync
                 _clientDialogueContinueObservedAt = 0f;
                 _clientDialogueLocalContinueAt = 0f;
                 _hostDialogueContinueObservedAt = 0f;
+                _clientPauseObservedAt = 0f;
+                _hostPauseObservedAt = 0f;
+                _clientUnpauseObservedAt = 0f;
+                _hostUnpauseObservedAt = 0f;
                 _hasFightStartBossHealth = false;
                 _fightStartBossName = string.Empty;
                 _fightStartBossHealth = 0f;

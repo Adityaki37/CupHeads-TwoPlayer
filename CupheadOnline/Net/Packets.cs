@@ -46,6 +46,8 @@ namespace CupheadOnline.Net
         LevelStartRelease = 6,
         MapDialogueStartedObserved = 7,
         MapDialogueContinueObserved = 8,
+        LanSteamE2EPauseObserved = 9,
+        LanSteamE2EUnpauseObserved = 10,
     }
 
     public enum MapDialogueAction : byte

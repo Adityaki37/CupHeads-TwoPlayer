@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.33 - 2026-04-27
+
+- Synced the host's in-level pause menu state to the guest through reliable session snapshots, using Cuphead's normal `LevelPauseGUI` open/close path on the guest.
+- Broadcast pause-state changes immediately instead of waiting for the next periodic host snapshot, so pause and resume propagate quickly during boss fights.
+- Expanded the LAN/Steam-emulation verifier to open the pause menu during the Slime fight, assert that the guest also sees it, resume, and assert that the pause card closes on both screens.
+
 ## v1.2.32 - 2026-04-27
 
 - Sanitized multiplayer loadout packets and level-start loadouts so invalid or legacy weapon IDs fall back to usable weapons instead of leaving a player unable to shoot.

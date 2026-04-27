@@ -570,8 +570,8 @@ while ((Get-Date) -lt $deadline) {
 
 $hostTextFinal = Read-Log $hostLog
 $clientTextFinal = Read-Log $clientLog
-$hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "Fight smoke complete|HOST PASS|FAIL" } | Select-Object -Last 8) -join "`n"
-$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "Client host-checkpoint sync complete|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout" } | Select-Object -Last 8) -join "`n"
+$hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "Fight smoke complete|pause menu|resume|pause sync|PAUSE/RESUME|HOST PASS|FAIL" } | Select-Object -Last 12) -join "`n"
+$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "Client host-checkpoint pause/resume sync complete|Client pause/resume sync complete|pause menu|resume|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout" } | Select-Object -Last 12) -join "`n"
 $legacyLoadoutFixtureExercised = $false
 $steamParityFailure = ""
 if ($UseLegacyClientLoadoutIds) {

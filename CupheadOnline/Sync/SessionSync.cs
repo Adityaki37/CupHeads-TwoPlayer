@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -53,6 +54,18 @@ namespace CupheadOnline.Sync
         private static int _localRetries;
         private static int _localParries;
 
+        private static readonly BindingFlags InstanceAny =
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        private static readonly MethodInfo PauseGuiPauseMethod =
+            typeof(AbstractPauseGUI).GetMethod("Pause", InstanceAny);
+        private static readonly MethodInfo PauseGuiUnpauseMethod =
+            typeof(AbstractPauseGUI).GetMethod("Unpause", InstanceAny);
+
+        private static bool _hasLastBroadcastPauseState;
+        private static bool _lastBroadcastPauseState;
+        private static bool _lastAppliedHostPauseState;
+        private static float _lastAppliedHostPauseAt = -1f;
+
         static SessionSync()
         {
             MultiplayerSession.OnSessionStarted += HandleSessionStarted;
@@ -79,6 +92,8 @@ namespace CupheadOnline.Sync
 
             if (MultiplayerSession.IsHost)
             {
+                BroadcastPauseSnapshotIfChanged();
+
                 if (Time.unscaledTime >= _nextHostSnapshotAt)
                 {
                     if (_hasTrackedSave && IsTitleScene())
@@ -235,6 +250,7 @@ namespace CupheadOnline.Sync
             }
 
             TryAutoFollowHostSnapshot(pkt);
+            ApplyHostPauseState(pkt);
             EvaluateDesync();
         }
 
@@ -385,6 +401,99 @@ namespace CupheadOnline.Sync
             };
 
             Plugin.Net.SendSessionSnapshot(ref pkt, reliable);
+        }
+
+        private static void BroadcastPauseSnapshotIfChanged()
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected || !MultiplayerSession.IsHost)
+                return;
+
+            bool paused = PauseManager.state == PauseManager.State.Paused;
+            if (_hasLastBroadcastPauseState && _lastBroadcastPauseState == paused)
+                return;
+
+            _hasLastBroadcastPauseState = true;
+            _lastBroadcastPauseState = paused;
+            BroadcastSessionSnapshot(true);
+            Plugin.Log.LogInfo("[Session] Broadcast host pause state: " + (paused ? "paused" : "unpaused") + ".");
+        }
+
+        private static void ApplyHostPauseState(SessionSnapshotPacket snapshot)
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected || MultiplayerSession.IsHost)
+                return;
+
+            if (!snapshot.IsInLevel)
+                return;
+
+            string localScene = GetActiveSceneName();
+            if (!string.IsNullOrEmpty(snapshot.SceneName)
+             && !string.IsNullOrEmpty(localScene)
+             && !string.Equals(snapshot.SceneName, localScene, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            bool localPaused = PauseManager.state == PauseManager.State.Paused;
+            if (localPaused == snapshot.IsPaused)
+                return;
+
+            bool appliedThroughGui = TrySetLevelPauseGuiState(snapshot.IsPaused);
+            if (!appliedThroughGui)
+            {
+                if (snapshot.IsPaused)
+                    PauseManager.Pause();
+                else
+                    PauseManager.Unpause();
+            }
+
+            _lastAppliedHostPauseState = snapshot.IsPaused;
+            _lastAppliedHostPauseAt = Time.unscaledTime;
+            Plugin.Log.LogInfo("[Session] Applied host pause state on guest: "
+                + (snapshot.IsPaused ? "paused" : "unpaused")
+                + (appliedThroughGui ? " via LevelPauseGUI." : " via PauseManager fallback."));
+        }
+
+        private static bool TrySetLevelPauseGuiState(bool paused)
+        {
+            try
+            {
+                var gui = UnityEngine.Object.FindObjectOfType<LevelPauseGUI>();
+                if (gui == null)
+                    return false;
+
+                if (paused)
+                {
+                    if (gui.state == AbstractPauseGUI.State.Paused
+                     || (gui.state == AbstractPauseGUI.State.Animating && PauseManager.state == PauseManager.State.Paused))
+                        return true;
+
+                    if (PauseGuiPauseMethod != null)
+                    {
+                        PauseGuiPauseMethod.Invoke(gui, null);
+                        return true;
+                    }
+
+                    gui.StartCoroutine(gui.ShowPauseMenu());
+                    return true;
+                }
+
+                if (gui.state == AbstractPauseGUI.State.Unpaused
+                 && PauseManager.state == PauseManager.State.Unpaused)
+                    return true;
+
+                if (PauseGuiUnpauseMethod != null)
+                {
+                    PauseGuiUnpauseMethod.Invoke(gui, null);
+                    return true;
+                }
+
+                PauseManager.Unpause();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[Session] Failed to apply host pause through LevelPauseGUI: " + ex.Message);
+                return false;
+            }
         }
 
         public static void BroadcastRecoveryBundle(string reason)
@@ -629,6 +738,7 @@ namespace CupheadOnline.Sync
                 sb.AppendLine("Host Level: " + snap.CurrentLevel);
                 sb.AppendLine("Host Tick: " + snap.HostTick);
                 sb.AppendLine("Host Save Revision: " + snap.SaveRevision);
+                sb.AppendLine("Host Paused: " + snap.IsPaused);
             }
 
             return sb.ToString().TrimEnd();
@@ -1095,6 +1205,7 @@ namespace CupheadOnline.Sync
             _localDeaths = 0;
             _localRetries = 0;
             _localParries = 0;
+            ResetPauseTracking();
         }
 
         private static void HandleSessionEnded()
@@ -1126,6 +1237,15 @@ namespace CupheadOnline.Sync
             _localDeaths = 0;
             _localRetries = 0;
             _localParries = 0;
+            ResetPauseTracking();
+        }
+
+        private static void ResetPauseTracking()
+        {
+            _hasLastBroadcastPauseState = false;
+            _lastBroadcastPauseState = false;
+            _lastAppliedHostPauseState = false;
+            _lastAppliedHostPauseAt = -1f;
         }
     }
 }
