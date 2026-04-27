@@ -20,6 +20,8 @@ namespace CupheadOnline.UI
             public Text Value;
             public Image Fill;
             public Image LagFill;
+            public RectTransform FillRect;
+            public RectTransform LagFillRect;
             public float DisplayedRatio;
             public float LagRatio;
         }
@@ -274,9 +276,7 @@ namespace CupheadOnline.UI
             lagRt.offsetMin = Vector2.zero;
             lagRt.offsetMax = Vector2.zero;
             var lagFill = lagGo.AddComponent<Image>();
-            lagFill.type = Image.Type.Filled;
-            lagFill.fillMethod = Image.FillMethod.Horizontal;
-            lagFill.fillOrigin = 0;
+            lagFill.type = Image.Type.Simple;
             lagFill.color = BarLag;
 
             var fillGo = new GameObject("Fill");
@@ -288,9 +288,7 @@ namespace CupheadOnline.UI
             fillRt.offsetMin = Vector2.zero;
             fillRt.offsetMax = Vector2.zero;
             var fill = fillGo.AddComponent<Image>();
-            fill.type = Image.Type.Filled;
-            fill.fillMethod = Image.FillMethod.Horizontal;
-            fill.fillOrigin = 0;
+            fill.type = Image.Type.Simple;
             fill.color = BarFill;
 
             var name = MakeText(root, "Name", "BOSS", 13, Cream, new Vector2(-326f, 8f), new Vector2(450f, 20f), TextAnchor.MiddleLeft);
@@ -304,6 +302,8 @@ namespace CupheadOnline.UI
                 Value = value,
                 Fill = fill,
                 LagFill = lagFill,
+                FillRect = fillRt,
+                LagFillRect = lagRt,
                 DisplayedRatio = 1f,
                 LagRatio = 1f,
             };
@@ -357,9 +357,25 @@ namespace CupheadOnline.UI
             bar.Value.text = Mathf.CeilToInt(Mathf.Max(0f, snapshot.Current)).ToString()
                 + " / "
                 + Mathf.CeilToInt(Mathf.Max(1f, snapshot.Total)).ToString();
-            bar.Fill.fillAmount = bar.DisplayedRatio;
-            bar.LagFill.fillAmount = Mathf.Max(bar.DisplayedRatio, bar.LagRatio);
+            SetFillWidth(bar.FillRect, bar.DisplayedRatio);
+            SetFillWidth(bar.LagFillRect, Mathf.Max(bar.DisplayedRatio, bar.LagRatio));
             bar.Fill.color = ratio <= 0.25f ? BarFillLow : BarFill;
+        }
+
+        private static void SetFillWidth(RectTransform rect, float ratio)
+        {
+            if (rect == null)
+                return;
+
+            ratio = Mathf.Clamp01(ratio);
+            bool shouldShow = ratio > 0.001f;
+            if (rect.gameObject.activeSelf != shouldShow)
+                rect.gameObject.SetActive(shouldShow);
+
+            rect.anchorMin = new Vector2(0f, 0f);
+            rect.anchorMax = new Vector2(ratio, 1f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
         }
 
         private static void ScanBosses(List<BossSnapshot> target)

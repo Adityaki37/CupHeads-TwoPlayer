@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.39 - 2026-04-27
+
+- Fixed the boss health overlay's visual fill so the red/orange bar width shrinks as health drops instead of only updating the numeric HP text.
+- Kept the existing live boss-health tracking and lag-fill effect, but now drives the UI through RectTransform width updates so Unity cannot ignore the fill amount on sprite-less images.
+
 ## v1.2.38 - 2026-04-27
 
 - Fixed guest-side Player Two revive mirroring when host and guest status ticks are independently ordered, so a host-observed local co-op revive is not dropped as stale.
