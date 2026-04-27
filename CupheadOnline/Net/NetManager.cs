@@ -248,6 +248,7 @@ namespace CupheadOnline.Net
         public void SendDamageEvent (ref DamageEventPacket  p) => SendReliable  (PacketType.DamageEvent,  ref p);
         public void SendSceneChange (ref SceneChangePacket  p) => SendReliable  (PacketType.SceneChange,  ref p);
         public void SendLobbySync   (ref LobbySyncPacket    p) => SendReliable  (PacketType.LobbySync,    ref p);
+        public void SendMapDialogue (ref MapDialoguePacket  p) => SendReliable  (PacketType.MapDialogue,  ref p);
 
         private void SendUnreliable<T>(PacketType type, ref T pkt) where T : struct, IPacket
         {

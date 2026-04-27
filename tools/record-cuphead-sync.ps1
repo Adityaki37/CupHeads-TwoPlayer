@@ -186,6 +186,9 @@ public static class CupheadContinuousCapture {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
@@ -415,6 +418,7 @@ Reset-TestSaves
 Configure-TestCopies
 
 [CupheadContinuousCapture]::SetProcessDPIAware() | Out-Null
+$foregroundBeforeLaunch = [CupheadContinuousCapture]::GetForegroundWindow()
 $unityArgs = "-screen-fullscreen 0 -screen-width 640 -screen-height 360"
 $ahk = Resolve-OptionalToolPath "AutoHotkey" @(
     "C:\Program Files\AutoHotkey\v2\AutoHotkey.exe",
@@ -481,6 +485,11 @@ if ($ahk -and (Test-Path -LiteralPath $ahkLauncher)) {
     [CupheadContinuousCapture]::ShowWindow($clientHandle, 9) | Out-Null
     [CupheadContinuousCapture]::MoveWindow($hostHandle, 30, 60, 672, 425, $true) | Out-Null
     [CupheadContinuousCapture]::MoveWindow($clientHandle, 730, 60, 672, 425, $true) | Out-Null
+}
+[CupheadContinuousCapture]::SetWindowPos($hostHandle, [IntPtr]1, 30, 60, 672, 425, 0x0010 -bor 0x0400) | Out-Null
+[CupheadContinuousCapture]::SetWindowPos($clientHandle, [IntPtr]1, 730, 60, 672, 425, 0x0010 -bor 0x0400) | Out-Null
+if ($foregroundBeforeLaunch -ne [IntPtr]::Zero) {
+    [CupheadContinuousCapture]::SetForegroundWindow($foregroundBeforeLaunch) | Out-Null
 }
 Start-Sleep -Milliseconds 800
 

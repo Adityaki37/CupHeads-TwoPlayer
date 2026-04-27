@@ -267,6 +267,15 @@ namespace CupheadOnline
             PatchTracked(harmony, registeredPatchTypes, typeof(PirateLevelBarrelExtraTriggerPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(AbstractLevelInteractiveEntityExtraPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(HouseLevelExitExtraPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerStartEnumSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerStartIntSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerStartEnumCallbackSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerStartIntCallbackSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerContinueChoiceSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerContinueSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(DialoguerEndSyncPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapDialogueInteractionClientGuardPatch));
+            PatchTracked(harmony, registeredPatchTypes, typeof(MapDialogueInteractionStartSpeechBubbleSyncPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(RobotLevelRobotHeadPrimaryPatch));
             PatchTracked(harmony, registeredPatchTypes, typeof(ChessKnightLevelInitPatch3P));
             PatchTracked(harmony, registeredPatchTypes, typeof(ChessKnightCheckTauntPatch3P));
@@ -507,6 +516,6 @@ namespace CupheadOnline
     {
         public const string GUID    = "com.cupheadonline.mod";
         public const string NAME    = "CupHeads";
-        public const string VERSION = "1.2.30";
+        public const string VERSION = "1.2.31";
     }
 }

@@ -191,6 +191,14 @@ namespace CupheadOnline.Net
                     break;
                 }
 
+                case PacketType.MapDialogue:
+                {
+                    var pkt = new MapDialoguePacket();
+                    pkt.Read(r);
+                    MapDialogueSync.Apply(pkt);
+                    break;
+                }
+
                 case PacketType.SessionStart:
                 {
                     if (MultiplayerSession.IsHost) break;

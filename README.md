@@ -28,6 +28,7 @@ In short: fewer players by design, fewer fragile custom scene patches in the mai
 - Host-authoritative client drift correction so the guest's local player gets gently pulled back to the host's true gameplay position instead of splitting into a separate solo run
 - Automatic host scene-follow so guests are pulled into the selected save/map when the host starts
 - Networked overworld handoff that spawns both native players, remaps guest controls onto Player Two, and syncs map movement before entering a level
+- Synced overworld NPC dialogue so speech bubbles open and advance together across host and guest
 - Universal input routing so the local player can switch between keyboard and controller at any time without restarting the session
 - Safer remote button-edge handling so jump, dash, confirm, cancel, and menu actions fire once per input press instead of repeating across packet gaps
 - Hybrid co-op authority: the host keeps world, scene, save, boss, RNG, and progression authority, while latency-friendly damage lets each player own hits to their own body

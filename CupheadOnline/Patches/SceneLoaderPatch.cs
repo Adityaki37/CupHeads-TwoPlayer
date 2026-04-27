@@ -26,6 +26,7 @@ namespace CupheadOnline.Patches
             ExtraParticipantReviveVisuals.Reset();
             ParticipantStatusTracker.Reset();
             PlayerColorSync.Reset();
+            MapDialogueSync.Reset();
             UI.BossHealthBarOverlay.Reset();
             UI.BattleAssistHud.Reset();
         }

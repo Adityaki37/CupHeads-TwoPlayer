@@ -23,6 +23,10 @@ namespace CupheadOnline.Sync
             LoadSlotSelect,
             WaitSlotSelect,
             WaitMap,
+            WalkToMapDialogue,
+            StartMapDialogue,
+            WaitMapDialogueStartAck,
+            WaitMapDialogueContinueAck,
             WalkToBoss,
             OpenStartCard,
             WaitLevel,
@@ -36,6 +40,7 @@ namespace CupheadOnline.Sync
         const float CardTimeout = 10f;
         const float LevelTimeout = 30f;
         const float FightDuration = 16f;
+        const float DialogueTimeout = 10f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -50,11 +55,14 @@ namespace CupheadOnline.Sync
             typeof(MapLevelLoader).GetField("level", InstanceAny);
         static readonly MethodInfo MapLevelLoaderActivateMethod =
             typeof(MapLevelLoader).GetMethod("Activate", InstanceAny, null, new[] { typeof(MapPlayerController) }, null);
+        static readonly MethodInfo MapDialogueStartSpeechBubbleMethod =
+            typeof(MapDialogueInteraction).GetMethod("StartSpeechBubble", InstanceAny);
 
         static Stage _stage = Stage.Idle;
         static float _stageStartedAt;
         static float _lastLogAt;
         static MapLevelLoader _targetLoader;
+        static MapDialogueInteraction _targetDialogue;
         static Levels _targetLevel;
         static int _saveSlot = -1;
         static bool _fallbackMapLoadTried;
@@ -63,8 +71,20 @@ namespace CupheadOnline.Sync
         static bool _clientCapturedMap;
         static bool _clientCapturedLevel;
         static bool _clientCapturedFightEnd;
+        static bool _clientCapturedDialogueStart;
+        static bool _clientCapturedDialogueContinue;
         static bool _clientLevelReached;
         static bool _remoteCheckpointReceived;
+        static bool _clientDialogueStartedObserved;
+        static bool _clientDialogueContinueObserved;
+        static bool _hostDialogueInteractPressed;
+        static bool _hostDialogueForceStarted;
+        static bool _clientDialogueInteractPressed;
+        static bool _clientDialogueAdvancePressed;
+        static float _clientDialogueStartObservedAt;
+        static float _clientDialogueContinueObservedAt;
+        static float _clientDialogueLocalContinueAt;
+        static float _hostDialogueContinueObservedAt;
         static float _clientLevelReachedAt;
         static bool _hasFightStartBossHealth;
         static string _fightStartBossName = string.Empty;
@@ -115,6 +135,18 @@ namespace CupheadOnline.Sync
                     case Stage.WaitMap:
                         WaitMap();
                         break;
+                    case Stage.WalkToMapDialogue:
+                        WalkToMapDialogue();
+                        break;
+                    case Stage.StartMapDialogue:
+                        StartMapDialogue();
+                        break;
+                    case Stage.WaitMapDialogueStartAck:
+                        WaitMapDialogueStartAck();
+                        break;
+                    case Stage.WaitMapDialogueContinueAck:
+                        WaitMapDialogueContinueAck();
+                        break;
                     case Stage.WalkToBoss:
                         WalkToBoss();
                         break;
@@ -140,15 +172,35 @@ namespace CupheadOnline.Sync
 
         public static bool TryHandleSessionSignal(SessionSignalPacket pkt)
         {
-            if (!Plugin.AutoRunLanSteamE2E || pkt.Kind != SessionSignalKind.LanSteamE2ECheckpoint)
+            if (!Plugin.AutoRunLanSteamE2E)
                 return false;
 
-            if (MultiplayerSession.IsClient)
+            switch (pkt.Kind)
             {
-                _remoteCheckpointReceived = true;
-                Log("Received host fight checkpoint.");
+                case SessionSignalKind.LanSteamE2ECheckpoint:
+                    if (MultiplayerSession.IsClient)
+                    {
+                        _remoteCheckpointReceived = true;
+                        Log("Received host fight checkpoint.");
+                    }
+                    return true;
+                case SessionSignalKind.MapDialogueStartedObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientDialogueStartedObserved = true;
+                        Log("Client reported map dialogue start sync.");
+                    }
+                    return true;
+                case SessionSignalKind.MapDialogueContinueObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientDialogueContinueObserved = true;
+                        Log("Client reported map dialogue continue sync.");
+                    }
+                    return true;
+                default:
+                    return false;
             }
-            return true;
         }
 
         public static bool TryGetLocalAxis(PlayerId playerId, int actionId, out float value)
@@ -326,6 +378,23 @@ namespace CupheadOnline.Sync
             if (p1 == null || p2 == null)
                 return;
 
+            if (IsMapDialogueSmokeTarget())
+            {
+                _targetDialogue = ChooseNearestMapDialogue(p1.transform.position);
+                if (_targetDialogue == null)
+                {
+                    Fail("No active MapDialogueInteraction was found on " + sceneName + ".");
+                    return;
+                }
+
+                Log("Map loaded for dialogue smoke; P1=" + DescribeMapPlayer(p1)
+                    + "; P2=" + DescribeMapPlayer(p2)
+                    + "; target=" + DescribeMapDialogue(_targetDialogue) + ".");
+                CaptureScreen("host_map_dialogue_target");
+                SetStage(Stage.WalkToMapDialogue, "Walking to map dialogue target.");
+                return;
+            }
+
             _targetLoader = ChooseConfiguredBossLoader(p1.transform.position);
             if (_stage == Stage.Failed)
                 return;
@@ -387,6 +456,150 @@ namespace CupheadOnline.Sync
             }
 
             _hostAxis = delta.normalized;
+        }
+
+        static void WalkToMapDialogue()
+        {
+            if (_targetDialogue == null)
+            {
+                Fail("Target dialogue disappeared while walking.");
+                return;
+            }
+
+            if (Map.Current == null || Map.Current.players == null || Map.Current.players[0] == null)
+                return;
+
+            var p1 = Map.Current.players[0];
+            var p2 = Map.Current.players.Length > 1 ? Map.Current.players[1] : null;
+            Vector2 activationPoint = GetInteractionPoint(_targetDialogue);
+            Vector2 target = GetMapDialogueApproachPoint(_targetDialogue);
+            Vector2 current = p1.transform.position;
+            Vector2 delta = target - current;
+            float distance = delta.magnitude;
+            float activationDistance = Vector2.Distance(current, activationPoint);
+            float p2ActivationDistance = p2 == null
+                ? float.MaxValue
+                : Vector2.Distance(p2.transform.position, activationPoint);
+
+            if (Time.unscaledTime - _lastLogAt > 2f)
+            {
+                _lastLogAt = Time.unscaledTime;
+                Log("Walking: distance to dialogue approach is " + distance.ToString("0.00")
+                    + "; P1 prompt distance is " + activationDistance.ToString("0.00")
+                    + "; P2 prompt distance is " + p2ActivationDistance.ToString("0.00") + ".");
+            }
+
+            CheckRemoteInput();
+            bool closeEnoughForForcedDialogue =
+                Time.unscaledTime - _stageStartedAt > 6.0f
+                && (activationDistance <= Mathf.Max(1.8f, _targetDialogue.interactionDistance * 2.0f)
+                 || p2ActivationDistance <= Mathf.Max(1.4f, _targetDialogue.interactionDistance * 1.4f));
+
+            if (activationDistance <= Mathf.Max(0.2f, _targetDialogue.interactionDistance * 0.98f)
+             || p2ActivationDistance <= Mathf.Max(0.2f, _targetDialogue.interactionDistance * 0.98f)
+             || distance <= 0.18f
+             || closeEnoughForForcedDialogue)
+            {
+                _hostAxis = Vector2.zero;
+                SetStage(Stage.StartMapDialogue, "Reached dialogue target; pressing interact.");
+                return;
+            }
+
+            if (TimedOut(WalkTimeout))
+            {
+                Fail("Could not walk to dialogue target within " + WalkTimeout + " seconds.");
+                return;
+            }
+
+            _hostAxis = delta.normalized;
+        }
+
+        static void StartMapDialogue()
+        {
+            _hostAxis = Vector2.zero;
+            CheckRemoteInput();
+
+            if (IsSpeechBubbleVisible())
+            {
+                Log("Host map dialogue opened.");
+                CaptureScreen("host_map_dialogue_open");
+                SetStage(Stage.WaitMapDialogueStartAck, "Waiting for client to apply dialogue start.");
+                return;
+            }
+
+            if (!_hostDialogueInteractPressed && Time.unscaledTime - _stageStartedAt > 0.5f)
+            {
+                _hostDialogueInteractPressed = true;
+                PressHost(CupheadButton.Accept);
+            }
+
+            if (!_hostDialogueForceStarted && Time.unscaledTime - _stageStartedAt > 2.5f)
+            {
+                _hostDialogueForceStarted = true;
+                Log("Normal map interact did not open quickly; force-starting speech bubble "
+                    + _targetDialogue.dialogueInteraction
+                    + " after walking to the NPC.");
+                if (MapDialogueStartSpeechBubbleMethod != null)
+                    MapDialogueStartSpeechBubbleMethod.Invoke(_targetDialogue, null);
+                else
+                    Dialoguer.StartDialogue(_targetDialogue.dialogueInteraction);
+            }
+
+            if (TimedOut(DialogueTimeout))
+                Fail("Map dialogue did not open on the host.");
+        }
+
+        static void WaitMapDialogueStartAck()
+        {
+            _hostAxis = Vector2.zero;
+            if (_clientDialogueStartedObserved && Time.unscaledTime - _stageStartedAt > 1.0f)
+            {
+                if (ShouldClientAdvanceMapDialogue())
+                {
+                    Log("Waiting for client to advance map dialogue after client observed start.");
+                    SetStage(Stage.WaitMapDialogueContinueAck, "Waiting for host to apply client dialogue continue.");
+                    return;
+                }
+
+                Log("Advancing host map dialogue after client observed start.");
+                Dialoguer.ContinueDialogue();
+                SetStage(Stage.WaitMapDialogueContinueAck, "Waiting for client to apply dialogue continue.");
+                return;
+            }
+
+            if (TimedOut(DialogueTimeout))
+                Fail("Client did not report map dialogue start sync.");
+        }
+
+        static void WaitMapDialogueContinueAck()
+        {
+            _hostAxis = Vector2.zero;
+            if (ShouldClientAdvanceMapDialogue() && MapDialogueSync.RemoteContinueCount > 0)
+            {
+                if (_hostDialogueContinueObservedAt <= 0f)
+                    _hostDialogueContinueObservedAt = Time.unscaledTime;
+
+                if (Time.unscaledTime - _hostDialogueContinueObservedAt <= 1.0f)
+                    return;
+
+                ResetScriptedInput();
+                Time.timeScale = 0f;
+                SetStage(Stage.Done, "MAP DIALOGUE CLIENT-CONTINUE PASS.");
+                Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+                return;
+            }
+
+            if (_clientDialogueContinueObserved)
+            {
+                ResetScriptedInput();
+                Time.timeScale = 0f;
+                SetStage(Stage.Done, "MAP DIALOGUE PASS.");
+                Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+                return;
+            }
+
+            if (TimedOut(DialogueTimeout))
+                Fail("Client did not report map dialogue continue sync.");
         }
 
         static void OpenStartCard()
@@ -563,6 +776,54 @@ namespace CupheadOnline.Sync
                 CaptureScreen("client_map_" + sceneName);
             }
 
+            if (IsMapDialogueSmokeTarget() && sceneName.StartsWith("scene_map_world", StringComparison.Ordinal))
+            {
+                if (!_clientCapturedDialogueStart && MapDialogueSync.RemoteStartCount > 0)
+                {
+                    _clientCapturedDialogueStart = true;
+                    _clientDialogueStartObservedAt = Time.unscaledTime;
+                    Log("Client map dialogue start sync observed.");
+                    CaptureScreen("client_map_dialogue_start");
+                    SendDialogueObservedSignal(SessionSignalKind.MapDialogueStartedObserved);
+                }
+
+                if (ShouldClientAdvanceMapDialogue()
+                 && !_clientCapturedDialogueContinue
+                 && _clientDialogueAdvancePressed
+                 && _clientDialogueLocalContinueAt > 0f
+                 && Time.unscaledTime - _clientDialogueLocalContinueAt > 1.0f)
+                {
+                    _clientCapturedDialogueContinue = true;
+                    Log("Client map dialogue local continue sent.");
+                    CaptureScreen("client_map_dialogue_local_continue");
+                    Time.timeScale = 0f;
+                    SetStage(Stage.Done, "CLIENT MAP DIALOGUE LOCAL-CONTINUE PASS.");
+                    Plugin.Log.LogInfo("[LanSteamE2E] CLIENT PASS");
+                    return;
+                }
+
+                if (!_clientCapturedDialogueContinue && MapDialogueSync.RemoteContinueCount > 0)
+                {
+                    _clientCapturedDialogueContinue = true;
+                    _clientDialogueContinueObservedAt = Time.unscaledTime;
+                    Log("Client map dialogue continue sync observed.");
+                    CaptureScreen("client_map_dialogue_continue");
+                }
+
+                if (_clientCapturedDialogueContinue
+                 && _clientDialogueContinueObservedAt > 0f
+                 && Time.unscaledTime - _clientDialogueContinueObservedAt > 1.0f)
+                {
+                    CaptureScreen("client_map_dialogue_continue_settled");
+                    SendDialogueObservedSignal(SessionSignalKind.MapDialogueContinueObserved);
+                    Time.timeScale = 0f;
+                    SetStage(Stage.Done, "CLIENT MAP DIALOGUE PASS.");
+                    Plugin.Log.LogInfo("[LanSteamE2E] CLIENT PASS");
+                }
+
+                return;
+            }
+
             if (!sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
                 return;
 
@@ -632,6 +893,19 @@ namespace CupheadOnline.Sync
             Plugin.Net.SendSessionSignal(ref pkt);
         }
 
+        static void SendDialogueObservedSignal(SessionSignalKind kind)
+        {
+            if (Plugin.Net == null || !Plugin.Net.IsConnected)
+                return;
+
+            var pkt = new SessionSignalPacket
+            {
+                Signal = (byte)kind,
+                SaveRevision = 0,
+            };
+            Plugin.Net.SendSessionSignal(ref pkt);
+        }
+
         static void KeepScriptedPlayersAlive()
         {
             var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
@@ -668,10 +942,70 @@ namespace CupheadOnline.Sync
                 return;
             }
 
+            if (IsMapDialogueSmokeTarget() && sceneName.StartsWith("scene_map_world", StringComparison.Ordinal))
+            {
+                DriveClientMapDialogueInput();
+                return;
+            }
+
             float t = Time.unscaledTime;
             _clientAxis = new Vector2(Mathf.Sin(t * 2.2f) > 0f ? 0.6f : -0.6f, 0f);
             _clientButtons = 0u;
             _clientDownButtons = 0u;
+        }
+
+        static void DriveClientMapDialogueInput()
+        {
+            _clientButtons = 0u;
+            _clientDownButtons = 0u;
+
+            if (ShouldClientAdvanceMapDialogue()
+             && _clientCapturedDialogueStart
+             && !_clientDialogueAdvancePressed
+             && Time.unscaledTime - _clientDialogueStartObservedAt > 2.0f)
+            {
+                _clientAxis = Vector2.zero;
+                _clientDialogueAdvancePressed = true;
+                _clientDialogueLocalContinueAt = Time.unscaledTime;
+                Log("Client advancing map dialogue.");
+                Dialoguer.ContinueDialogue();
+                return;
+            }
+
+            if (Map.Current == null || Map.Current.players == null || Map.Current.players.Length < 2 || Map.Current.players[1] == null)
+            {
+                _clientAxis = Vector2.zero;
+                return;
+            }
+
+            var p2 = Map.Current.players[1];
+            var dialogue = ChooseNearestMapDialogue(p2.transform.position);
+            if (dialogue == null)
+            {
+                _clientAxis = Vector2.zero;
+                return;
+            }
+
+            Vector2 activationPoint = GetInteractionPoint(dialogue);
+            Vector2 approach = GetMapDialogueApproachPoint(dialogue);
+            Vector2 current = p2.transform.position;
+            float activationDistance = Vector2.Distance(current, activationPoint);
+            if (activationDistance <= Mathf.Max(0.2f, dialogue.interactionDistance * 0.95f))
+            {
+                _clientAxis = Vector2.zero;
+                if (ShouldClientAdvanceMapDialogue())
+                    return;
+
+                if (!_clientDialogueInteractPressed)
+                {
+                    _clientDialogueInteractPressed = true;
+                    PressClient(CupheadButton.Accept);
+                }
+                return;
+            }
+
+            Vector2 delta = approach - current;
+            _clientAxis = delta.sqrMagnitude > 0.04f ? delta.normalized : Vector2.zero;
         }
 
         static void CheckRemoteInput()
@@ -754,6 +1088,45 @@ namespace CupheadOnline.Sync
             return best;
         }
 
+        static MapDialogueInteraction ChooseNearestMapDialogue(Vector3 from)
+        {
+            MapDialogueInteraction[] dialogues = UnityEngine.Object.FindObjectsOfType<MapDialogueInteraction>();
+            MapDialogueInteraction best = null;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < dialogues.Length; i++)
+            {
+                var dialogue = dialogues[i];
+                if (dialogue == null || !dialogue.isActiveAndEnabled || !dialogue.gameObject.activeInHierarchy)
+                    continue;
+
+                float dist = Vector2.Distance(from, GetInteractionPoint(dialogue));
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = dialogue;
+                }
+            }
+            return best;
+        }
+
+        static bool IsMapDialogueSmokeTarget()
+        {
+            string configured = Plugin.AutoRunLanSteamE2ETarget;
+            return !string.IsNullOrEmpty(configured)
+                && (string.Equals(configured, "MapDialogue", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(configured, "Dialogue", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(configured, "NpcDialogue", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(configured, "MapDialogueClientContinue", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals(configured, "DialogueClientContinue", StringComparison.OrdinalIgnoreCase));
+        }
+
+        static bool ShouldClientAdvanceMapDialogue()
+        {
+            string configured = Plugin.AutoRunLanSteamE2ETarget;
+            return string.Equals(configured, "MapDialogueClientContinue", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(configured, "DialogueClientContinue", StringComparison.OrdinalIgnoreCase);
+        }
+
         static MapLevelLoader ChooseConfiguredBossLoader(Vector3 from)
         {
             string configured = Plugin.AutoRunLanSteamE2ETarget;
@@ -829,6 +1202,42 @@ namespace CupheadOnline.Sync
             return (Vector2)loader.transform.position + loader.interactionPoint;
         }
 
+        static Vector2 GetInteractionPoint(AbstractMapInteractiveEntity entity)
+        {
+            return (Vector2)entity.transform.position + entity.interactionPoint;
+        }
+
+        static Vector2 GetMapDialogueApproachPoint(MapDialogueInteraction dialogue)
+        {
+            Vector2 point = GetInteractionPoint(dialogue);
+            float offset = Mathf.Min(0.85f, Mathf.Max(0.35f, dialogue.interactionDistance * 0.8f));
+            return point + Vector2.down * offset;
+        }
+
+        static bool IsSpeechBubbleVisible()
+        {
+            var bubble = SpeechBubble.Instance;
+            return bubble != null && bubble.displayState != SpeechBubble.DisplayState.Hidden;
+        }
+
+        static string DescribeMapDialogue(MapDialogueInteraction dialogue)
+        {
+            if (dialogue == null)
+                return "missing";
+
+            Vector2 point = GetInteractionPoint(dialogue);
+            return dialogue.gameObject.name
+                + " dialogue="
+                + dialogue.dialogueInteraction
+                + " radius="
+                + dialogue.interactionDistance.ToString("0.00")
+                + " pos=("
+                + point.x.ToString("0.00")
+                + ","
+                + point.y.ToString("0.00")
+                + ")";
+        }
+
         static void ActivateTargetLoader(MapPlayerController player)
         {
             if (_targetLoader == null || player == null || MapLevelLoaderActivateMethod == null)
@@ -853,6 +1262,14 @@ namespace CupheadOnline.Sync
             _hostButtons |= mask;
             _hostDownButtons |= mask;
             _hostDownUntilFrame = Math.Max(_hostDownUntilFrame, Time.frameCount + 4);
+        }
+
+        static void PressClient(CupheadButton button)
+        {
+            uint mask = ButtonMask(button);
+            _clientButtons |= mask;
+            _clientDownButtons |= mask;
+            _clientDownUntilFrame = Math.Max(_clientDownUntilFrame, Time.frameCount + 4);
         }
 
         static void HoldHost(CupheadButton button)
@@ -907,15 +1324,29 @@ namespace CupheadOnline.Sync
             _lastLogAt = -100f;
             if (stage == Stage.LoadSlotSelect)
             {
+                _targetLoader = null;
+                _targetDialogue = null;
                 _fallbackMapLoadTried = false;
                 _fallbackUnityLevelLoadTried = false;
                 _sawRemoteInput = false;
                 _clientCapturedMap = false;
                 _clientCapturedLevel = false;
                 _clientCapturedFightEnd = false;
+                _clientCapturedDialogueStart = false;
+                _clientCapturedDialogueContinue = false;
                 _clientLevelReached = false;
                 _remoteCheckpointReceived = false;
+                _clientDialogueStartedObserved = false;
+                _clientDialogueContinueObserved = false;
+                _hostDialogueInteractPressed = false;
+                _hostDialogueForceStarted = false;
+                _clientDialogueInteractPressed = false;
+                _clientDialogueAdvancePressed = false;
                 _clientLevelReachedAt = 0f;
+                _clientDialogueStartObservedAt = 0f;
+                _clientDialogueContinueObservedAt = 0f;
+                _clientDialogueLocalContinueAt = 0f;
+                _hostDialogueContinueObservedAt = 0f;
                 _hasFightStartBossHealth = false;
                 _fightStartBossName = string.Empty;
                 _fightStartBossHealth = 0f;

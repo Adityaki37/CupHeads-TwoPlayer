@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.31 - 2026-04-26
+
+- Added host/client sync for overworld NPC dialogue starts, advances, and closes so both players see the same speech bubble progression.
+- Blocked independent client-side NPC dialogue starts on the map while still allowing the guest to advance an active synced dialogue.
+- Expanded the two-process LAN/Steam-emulation verifier with map dialogue smoke targets, including host-advance and client-advance checks.
+
 ## v1.2.23 - 2026-04-25
 
 - Replaced the hidden F11 local-dev toggle with an in-game CupHeads Dev Lab overlay.

@@ -1695,6 +1695,7 @@ namespace CupheadOnline.Net
         public void SendPlayerStatus(ref PlayerStatusPacket p) => Send(PacketType.PlayerStatus, ref p, true);
         public void SendReviveRequest(ref ReviveRequestPacket p) => Send(PacketType.ReviveRequest, ref p, true);
         public void SendReviveGrant(ref ReviveGrantPacket p) => Send(PacketType.ReviveGrant, ref p, true);
+        public void SendMapDialogue(ref MapDialoguePacket p) => Send(PacketType.MapDialogue, ref p, true);
         public bool SendDamageEventForParticipant(byte participantId, float damage, byte source, uint tick)
         {
             return SendDamageEventForParticipant(participantId, damage, 0f, source, tick);

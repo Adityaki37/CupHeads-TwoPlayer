@@ -32,6 +32,7 @@ namespace CupheadOnline.Net
         PlayerStatus = 19,
         ReviveRequest = 20,
         ReviveGrant = 21,
+        MapDialogue = 22,
     }
 
     public enum SessionSignalKind : byte
@@ -43,6 +44,15 @@ namespace CupheadOnline.Net
         LanSteamE2ECheckpoint = 4,
         LevelLoaded = 5,
         LevelStartRelease = 6,
+        MapDialogueStartedObserved = 7,
+        MapDialogueContinueObserved = 8,
+    }
+
+    public enum MapDialogueAction : byte
+    {
+        Start = 1,
+        Continue = 2,
+        End = 3,
     }
 
     public struct PlayerStatePacket : IPacket
@@ -551,6 +561,32 @@ namespace CupheadOnline.Net
             Flags = r.ReadByte();
             RevivePosX = r.ReadSingle();
             RevivePosY = r.ReadSingle();
+            Tick = r.ReadUInt32();
+        }
+    }
+
+    public struct MapDialoguePacket : IPacket
+    {
+        public byte Action;
+        public int DialogueId;
+        public int Choice;
+        public uint Tick;
+
+        public MapDialogueAction Kind => (MapDialogueAction)Action;
+
+        public void Write(BinaryWriter w)
+        {
+            w.Write(Action);
+            w.Write(DialogueId);
+            w.Write(Choice);
+            w.Write(Tick);
+        }
+
+        public void Read(BinaryReader r)
+        {
+            Action = r.ReadByte();
+            DialogueId = r.ReadInt32();
+            Choice = r.ReadInt32();
             Tick = r.ReadUInt32();
         }
     }
