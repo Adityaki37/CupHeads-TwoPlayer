@@ -16,6 +16,8 @@ namespace CupheadOnline.Sync
         static bool _hostReleaseSent;
         static Levels _hostLevel;
         static float _hostGateStartedAt;
+        static float _hostLocalReleaseAt;
+        static float _hostReleaseDelaySeconds;
 
         static bool _clientGateActive;
         static bool _clientLoadedSent;
@@ -26,8 +28,9 @@ namespace CupheadOnline.Sync
         static bool _holdingTimeScale;
         static float _lastLogAt;
 
-        public static bool IsHostWaitingForGuestStart => _hostGateActive && !_hostReleaseSent;
+        public static bool IsHostWaitingForGuestStart => _hostGateActive;
         public static bool IsClientWaitingForStartRelease => _clientGateActive && !_clientReleaseReceived;
+        public static float LastHostReleaseDelaySeconds => _hostReleaseDelaySeconds;
 
         public static void BeginHostLevelLoad(Levels level)
         {
@@ -40,6 +43,8 @@ namespace CupheadOnline.Sync
             _hostReleaseSent = false;
             _hostLevel = level;
             _hostGateStartedAt = Time.unscaledTime;
+            _hostLocalReleaseAt = 0f;
+            _hostReleaseDelaySeconds = 0f;
             _lastLogAt = -100f;
             Plugin.Log.LogInfo("[LevelStartSync] Host waiting for guest to load " + level + ".");
         }
@@ -136,6 +141,21 @@ namespace CupheadOnline.Sync
             if (_hostSceneLoaded)
                 HoldLevelStart("host");
 
+            if (_hostReleaseSent)
+            {
+                if (Time.unscaledTime >= _hostLocalReleaseAt)
+                {
+                    ReleaseLocal("host-latency-aligned");
+                    _hostGateActive = false;
+                    return;
+                }
+
+                LogWaiting("Host release sent; holding local start for "
+                    + Mathf.Max(0f, _hostLocalReleaseAt - Time.unscaledTime).ToString("0.00")
+                    + "s so the guest receives the release.");
+                return;
+            }
+
             if (_hostSceneLoaded && _hostGuestLoaded)
             {
                 ReleaseHostAndGuest();
@@ -198,11 +218,20 @@ namespace CupheadOnline.Sync
             {
                 SendSignal(SessionSignalKind.LevelStartRelease, ToToken(_hostLevel));
                 _hostReleaseSent = true;
-                Plugin.Log.LogInfo("[LevelStartSync] Released level start for " + _hostLevel + ".");
+                _hostReleaseDelaySeconds = EstimateOneWayReleaseDelaySeconds();
+                _hostLocalReleaseAt = Time.unscaledTime + _hostReleaseDelaySeconds;
+                Plugin.Log.LogInfo("[LevelStartSync] Released level start for "
+                    + _hostLevel
+                    + "; delaying host local release by "
+                    + _hostReleaseDelaySeconds.ToString("0.000")
+                    + "s for latency alignment.");
             }
 
-            ReleaseLocal("host");
-            _hostGateActive = false;
+            if (_hostReleaseDelaySeconds <= 0.001f)
+            {
+                ReleaseLocal("host");
+                _hostGateActive = false;
+            }
         }
 
         static void HoldLevelStart(string role)
@@ -243,6 +272,19 @@ namespace CupheadOnline.Sync
                 SaveRevision = levelToken,
             };
             Plugin.Net.SendSessionSignal(ref pkt);
+        }
+
+        public static float EstimateOneWayReleaseDelaySeconds()
+        {
+            float delay = 0f;
+
+            if (Plugin.Net != null && Plugin.Net.Latency > 0)
+                delay = Mathf.Max(delay, Plugin.Net.Latency * 0.0005f);
+
+            if (Plugin.LanArtificialLatencyMs > 0)
+                delay = Mathf.Max(delay, Plugin.LanArtificialLatencyMs / 1000f);
+
+            return Mathf.Clamp(delay, 0f, 2.5f);
         }
 
         static ushort ToToken(Levels level)

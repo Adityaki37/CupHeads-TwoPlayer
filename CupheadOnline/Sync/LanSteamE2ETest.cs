@@ -48,6 +48,8 @@ namespace CupheadOnline.Sync
         const float ReviveSmokeTimeout = 12f;
         const float GameOverTimeout = 12f;
         const float RetryTimeout = 35f;
+        const float LevelStartVisualSyncTimeout = 8f;
+        const float LevelStartVisualSyncTolerance = 0.35f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -109,6 +111,9 @@ namespace CupheadOnline.Sync
         static bool _clientPauseResumeCompleteLogged;
         static bool _clientP2MapActivationBlocked;
         static bool _clientReviveTestStartSignalReceived;
+        static bool _clientLevelReleaseObservedSignalSent;
+        static bool _clientLevelReleaseObservedSignalReceived;
+        static bool _hostLevelReleaseSkewChecked;
         static bool _clientReviveDeathForced;
         static bool _clientReviveMirrorVerified;
         static bool _clientReviveObservedSignalReceived;
@@ -178,6 +183,8 @@ namespace CupheadOnline.Sync
         static float _hostRetryPressedAt;
         static float _clientGameOverStartedAt;
         static float _clientRetryClickedAt;
+        static float _hostFightReleasedAt;
+        static float _clientLevelReleaseObservedSignalReceivedAt;
         static float _clientLevelReachedAt;
         static float _clientFightReleasedAt;
         static int _hostRetryStartRetries;
@@ -378,6 +385,14 @@ namespace CupheadOnline.Sync
                     {
                         _clientRetryObservedSignalReceived = true;
                         Log("Client reported successful post-Retry level reload.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2ELevelReleasedObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientLevelReleaseObservedSignalReceived = true;
+                        _clientLevelReleaseObservedSignalReceivedAt = Time.unscaledTime;
+                        Log("Client reported level-start visual release.");
                     }
                     return true;
                 default:
@@ -870,6 +885,17 @@ namespace CupheadOnline.Sync
                 return;
             }
 
+            if (_hostFightReleasedAt <= 0f)
+            {
+                _hostFightReleasedAt = Time.unscaledTime;
+                Log("Host level-start visual release observed after "
+                    + LevelStartSync.LastHostReleaseDelaySeconds.ToString("0.000")
+                    + "s local delay.");
+            }
+
+            if (!VerifyLevelStartVisualSync())
+                return;
+
             if (!RunHostBuiltInReviveSmoke())
                 return;
 
@@ -1333,7 +1359,15 @@ namespace CupheadOnline.Sync
             }
 
             if (_clientFightReleasedAt <= 0f)
+            {
                 _clientFightReleasedAt = Time.unscaledTime;
+                Log("Client level-start visual release observed.");
+                if (!_clientLevelReleaseObservedSignalSent)
+                {
+                    _clientLevelReleaseObservedSignalSent = true;
+                    SendDialogueObservedSignal(SessionSignalKind.LanSteamE2ELevelReleasedObserved);
+                }
+            }
 
             if (!_clientReviveMirrorVerified)
             {
@@ -1416,6 +1450,48 @@ namespace CupheadOnline.Sync
                 || _clientGameOverObservedSignalSent
                 || _clientRetryClickSignalReceived
                 || _clientRetryObservedSignalSent;
+        }
+
+        static bool VerifyLevelStartVisualSync()
+        {
+            if (_hostLevelReleaseSkewChecked)
+                return true;
+
+            if (_clientLevelReleaseObservedSignalReceived)
+            {
+                float estimatedClientReleaseAt = _clientLevelReleaseObservedSignalReceivedAt
+                    - LevelStartSync.EstimateOneWayReleaseDelaySeconds();
+                float skew = estimatedClientReleaseAt - _hostFightReleasedAt;
+                _hostLevelReleaseSkewChecked = true;
+
+                Log("Level-start visual sync skew estimate: "
+                    + skew.ToString("+0.000;-0.000;0.000")
+                    + "s; tolerance="
+                    + LevelStartVisualSyncTolerance.ToString("0.000")
+                    + "s.");
+
+                if (Mathf.Abs(skew) > LevelStartVisualSyncTolerance)
+                {
+                    Fail("Level-start visual sync skew exceeded tolerance: "
+                        + skew.ToString("+0.000;-0.000;0.000")
+                        + "s.");
+                    return false;
+                }
+
+                return true;
+            }
+
+            KeepScriptedPlayersAlive();
+            CheckRemoteInput();
+
+            if (_hostFightReleasedAt > 0f
+             && Time.unscaledTime - _hostFightReleasedAt > LevelStartVisualSyncTimeout)
+            {
+                Fail("Client did not report level-start visual release.");
+                return false;
+            }
+
+            return false;
         }
 
         static void RunClientGameOverRetryObserver(string sceneName, LevelPlayerController p1, LevelPlayerController p2)
@@ -2779,6 +2855,9 @@ namespace CupheadOnline.Sync
                 _clientPauseResumeCompleteLogged = false;
                 _clientP2MapActivationBlocked = false;
                 _clientReviveTestStartSignalReceived = false;
+                _clientLevelReleaseObservedSignalSent = false;
+                _clientLevelReleaseObservedSignalReceived = false;
+                _hostLevelReleaseSkewChecked = false;
                 _clientReviveDeathForced = false;
                 _clientReviveMirrorVerified = false;
                 _clientReviveObservedSignalReceived = false;
@@ -2850,6 +2929,8 @@ namespace CupheadOnline.Sync
                 _hostRetryPressedAt = 0f;
                 _clientGameOverStartedAt = 0f;
                 _clientRetryClickedAt = 0f;
+                _hostFightReleasedAt = 0f;
+                _clientLevelReleaseObservedSignalReceivedAt = 0f;
                 _hostRetryStartRetries = 0;
                 _hasFightStartBossHealth = false;
                 _fightStartBossName = string.Empty;

@@ -58,6 +58,7 @@ namespace CupheadOnline.Net
         LanSteamE2EGameOverObserved = 16,
         LanSteamE2ERetryClicked = 17,
         LanSteamE2ERetryObserved = 18,
+        LanSteamE2ELevelReleasedObserved = 19,
     }
 
     public enum MapDialogueAction : byte

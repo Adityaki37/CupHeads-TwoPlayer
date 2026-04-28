@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.45 - 2026-04-28
+
+- Delayed the host's local level-start release by the estimated one-way network latency after sending the release packet, so host and guest leave the "Ready?" gate together instead of the host starting immediately while the release packet is still in flight.
+- Added a LAN/Steam verifier acknowledgement for level-start visual release and fail the 700ms test if the estimated host/client release skew exceeds 0.35 seconds.
+- Extended the 700ms verifier logs to surface level-start visual-sync evidence alongside revive, shooting, pause/resume, and Retry checks.
+
 ## v1.2.44 - 2026-04-28
 
 - Added LAN/Steam verifier coverage for the boss-loss Retry path: both peers must enter the game-over Retry menu, the host clicks Retry, and both peers must reload the boss with alive Player One/Player Two and reset boss health.

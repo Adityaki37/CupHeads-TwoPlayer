@@ -576,8 +576,8 @@ while ((Get-Date) -lt $deadline) {
 
 $hostTextFinal = Read-Log $hostLog
 $clientTextFinal = Read-Log $clientLog
-$hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "Guest-only shooting smoke|Fight smoke complete|pause menu|resume|pause sync|PAUSE/RESUME|game-over|Game-over|Retry|GAME OVER RETRY|HOST PASS|FAIL" } | Select-Object -Last 20) -join "`n"
-$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "Client host-checkpoint pause/resume sync complete|Client pause/resume sync complete|pause menu|resume|game-over|Game-over|Retry|CLIENT GAME OVER RETRY|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout|Simulation drift detected|Host snapshots stalled" } | Select-Object -Last 20) -join "`n"
+$hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Released level start|Local level start gate|Guest-only shooting smoke|Fight smoke complete|pause menu|resume|pause sync|PAUSE/RESUME|game-over|Game-over|Retry|GAME OVER RETRY|HOST PASS|FAIL" } | Select-Object -Last 24) -join "`n"
+$clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Host released level start|Local level start gate|Client host-checkpoint pause/resume sync complete|Client pause/resume sync complete|pause menu|resume|game-over|Game-over|Retry|CLIENT GAME OVER RETRY|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout|Simulation drift detected|Host snapshots stalled" } | Select-Object -Last 24) -join "`n"
 $legacyLoadoutFixtureExercised = $false
 $steamParityFailure = ""
 $syncHealthFailure = ""
