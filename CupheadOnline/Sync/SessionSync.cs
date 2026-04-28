@@ -56,6 +56,10 @@ namespace CupheadOnline.Sync
         private static readonly Dictionary<byte, BattleParticipantStats> _remoteBattleStats =
             new Dictionary<byte, BattleParticipantStats>(4);
         private static int _trackedBattleLevel = -1;
+        private static bool _preserveBattleStatsForRetryReload;
+        private static int _preservedRetryBattleLevel = -1;
+        private static bool _preserveBattleStatsSawInactive;
+        private static float _preserveBattleStatsStartedAt = -1f;
         private static float _lastLocalBattleStatsSentAt = -1f;
         private static int _lastSentBattleLevel = -1;
         private static int _lastSentDeaths = -1;
@@ -634,7 +638,24 @@ namespace CupheadOnline.Sync
         public static void RecordLocalRetry()
         {
             if (!MultiplayerSession.IsActive) return;
-            TrackBattleStatsLevel();
+            int retryLevel = GetCurrentBattleLevel();
+            if (retryLevel < 0 && Enum.IsDefined(typeof(Levels), SceneLoader.CurrentLevel))
+                retryLevel = (int)SceneLoader.CurrentLevel;
+
+            if (retryLevel >= 0)
+            {
+                _preserveBattleStatsForRetryReload = true;
+                _preservedRetryBattleLevel = retryLevel;
+                _preserveBattleStatsSawInactive = false;
+                _preserveBattleStatsStartedAt = Time.unscaledTime;
+                if (_trackedBattleLevel < 0)
+                    _trackedBattleLevel = retryLevel;
+            }
+            else
+            {
+                TrackBattleStatsLevel();
+            }
+
             _localRetries++;
             MaybeSendLocalBattleStats(true);
         }
@@ -1195,7 +1216,37 @@ namespace CupheadOnline.Sync
         {
             int level = GetCurrentBattleLevel();
             if (_trackedBattleLevel == level)
+            {
+                if (_preserveBattleStatsForRetryReload
+                 && _preserveBattleStatsSawInactive
+                 && level == _preservedRetryBattleLevel)
+                    ClearRetryBattleStatsPreservation(resetSendBookkeeping: true);
+
                 return;
+            }
+
+            if (_preserveBattleStatsForRetryReload)
+            {
+                if (level < 0)
+                {
+                    _preserveBattleStatsSawInactive = true;
+                    _trackedBattleLevel = level;
+                    ResetHostBattleTimingIfInactive();
+                    return;
+                }
+
+                if (level == _preservedRetryBattleLevel && _preserveBattleStatsSawInactive)
+                {
+                    _trackedBattleLevel = level;
+                    ClearRetryBattleStatsPreservation(resetSendBookkeeping: true);
+                    return;
+                }
+
+                if (Time.unscaledTime - _preserveBattleStatsStartedAt < RetryStatsPreserveTimeoutSeconds())
+                    return;
+
+                ClearRetryBattleStatsPreservation(resetSendBookkeeping: false);
+            }
 
             _trackedBattleLevel = level;
             _localDeaths = 0;
@@ -1207,16 +1258,40 @@ namespace CupheadOnline.Sync
             _lastSentDeaths = -1;
             _lastSentParries = -1;
             if (level < 0)
-            {
-                _hostBattleLevel = -1;
-                _hostBattleElapsedSeconds = 0f;
-                _hostBattleSnapshotAt = -1f;
-                _hostBattlePaused = false;
-                _hostBattleDeaths = 0;
-                _hostBattleRetries = 0;
-                _hostBattleParries = 0;
-                _lastBattleTimingLogAt = -1f;
-            }
+                ResetHostBattleTimingIfInactive();
+        }
+
+        private static void ResetHostBattleTimingIfInactive()
+        {
+            _hostBattleLevel = -1;
+            _hostBattleElapsedSeconds = 0f;
+            _hostBattleSnapshotAt = -1f;
+            _hostBattlePaused = false;
+            _hostBattleDeaths = 0;
+            _hostBattleRetries = 0;
+            _hostBattleParries = 0;
+            _lastBattleTimingLogAt = -1f;
+        }
+
+        private static float RetryStatsPreserveTimeoutSeconds()
+        {
+            return 8f;
+        }
+
+        private static void ClearRetryBattleStatsPreservation(bool resetSendBookkeeping)
+        {
+            _preserveBattleStatsForRetryReload = false;
+            _preservedRetryBattleLevel = -1;
+            _preserveBattleStatsSawInactive = false;
+            _preserveBattleStatsStartedAt = -1f;
+
+            if (!resetSendBookkeeping)
+                return;
+
+            _lastLocalBattleStatsSentAt = -1f;
+            _lastSentBattleLevel = -1;
+            _lastSentDeaths = -1;
+            _lastSentParries = -1;
         }
 
         private static void MaybeSendLocalBattleStats(bool force)
@@ -1584,6 +1659,10 @@ namespace CupheadOnline.Sync
         {
             _remoteBattleStats.Clear();
             _trackedBattleLevel = -1;
+            _preserveBattleStatsForRetryReload = false;
+            _preservedRetryBattleLevel = -1;
+            _preserveBattleStatsSawInactive = false;
+            _preserveBattleStatsStartedAt = -1f;
             _lastLocalBattleStatsSentAt = -1f;
             _lastSentBattleLevel = -1;
             _lastSentDeaths = -1;

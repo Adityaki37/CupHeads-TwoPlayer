@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.44 - 2026-04-28
+
+- Added LAN/Steam verifier coverage for the boss-loss Retry path: both peers must enter the game-over Retry menu, the host clicks Retry, and both peers must reload the boss with alive Player One/Player Two and reset boss health.
+- Fixed battle-assist retry stats being cleared during the game-over/reload gap, so a host Retry now survives the brief inactive loading state and reports the retry count after the level reload.
+- Extended the verifier summaries to surface game-over and Retry evidence in the generated run report.
+
 ## v1.2.43 - 2026-04-28
 
 - Made remote input buffering latency-aware so high-Steam-relay guests no longer time out after only a few fixed frames, fixing cases where the guest showed shooting/jumping locally but the host never spawned the remote bullets or movement.

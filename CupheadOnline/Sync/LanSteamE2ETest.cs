@@ -32,6 +32,7 @@ namespace CupheadOnline.Sync
             WaitLevel,
             Fight,
             PauseSync,
+            GameOverRetry,
             ClientObserve,
             Done,
             Failed,
@@ -45,6 +46,8 @@ namespace CupheadOnline.Sync
         const float DialogueTimeout = 10f;
         const float PauseTimeout = 8f;
         const float ReviveSmokeTimeout = 12f;
+        const float GameOverTimeout = 12f;
+        const float RetryTimeout = 35f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -75,6 +78,10 @@ namespace CupheadOnline.Sync
             typeof(ParrySwitch).GetMethod("OnParryPostPause", InstanceAny);
         static readonly MethodInfo PlayerDeathEffectReviveParryAnimCompleteMethod =
             typeof(PlayerDeathEffect).GetMethod("OnReviveParryAnimComplete", InstanceAny);
+        static readonly FieldInfo LevelGameOverStateField =
+            typeof(LevelGameOverGUI).GetField("state", InstanceAny);
+        static readonly FieldInfo LevelGameOverSelectionField =
+            typeof(LevelGameOverGUI).GetField("selection", InstanceAny);
 
         static Stage _stage = Stage.Idle;
         static float _stageStartedAt;
@@ -99,6 +106,7 @@ namespace CupheadOnline.Sync
         static bool _clientPauseSignalReceived;
         static bool _clientUnpauseObserved;
         static bool _clientUnpauseSignalReceived;
+        static bool _clientPauseResumeCompleteLogged;
         static bool _clientP2MapActivationBlocked;
         static bool _clientReviveTestStartSignalReceived;
         static bool _clientReviveDeathForced;
@@ -130,6 +138,18 @@ namespace CupheadOnline.Sync
         static bool _hostReverseReviveAnimCompleteTriggered;
         static bool _hostReverseReviveVerified;
         static bool _hostFightTimerResetAfterRevive;
+        static bool _hostGameOverStartSignalSent;
+        static bool _hostGameOverDeathForced;
+        static bool _hostGameOverObserved;
+        static bool _hostRetryPressed;
+        static bool _hostRetryReloadVerified;
+        static bool _clientGameOverStartSignalReceived;
+        static bool _clientGameOverDeathForced;
+        static bool _clientGameOverObservedSignalSent;
+        static bool _clientGameOverObservedSignalReceived;
+        static bool _clientRetryClickSignalReceived;
+        static bool _clientRetryObservedSignalSent;
+        static bool _clientRetryObservedSignalReceived;
         static bool _hostDialogueInteractPressed;
         static bool _hostDialogueForceStarted;
         static bool _clientDialogueInteractPressed;
@@ -154,8 +174,13 @@ namespace CupheadOnline.Sync
         static float _hostPauseObservedAt;
         static float _clientUnpauseObservedAt;
         static float _hostUnpauseObservedAt;
+        static float _hostGameOverStartedAt;
+        static float _hostRetryPressedAt;
+        static float _clientGameOverStartedAt;
+        static float _clientRetryClickedAt;
         static float _clientLevelReachedAt;
         static float _clientFightReleasedAt;
+        static int _hostRetryStartRetries;
         static bool _hasFightStartBossHealth;
         static string _fightStartBossName = string.Empty;
         static float _fightStartBossHealth;
@@ -241,6 +266,9 @@ namespace CupheadOnline.Sync
                     case Stage.PauseSync:
                         PauseSync();
                         break;
+                    case Stage.GameOverRetry:
+                        GameOverRetry();
+                        break;
                     case Stage.ClientObserve:
                         ClientObserve();
                         break;
@@ -320,6 +348,36 @@ namespace CupheadOnline.Sync
                     {
                         _clientReverseReviveObservedSignalReceived = true;
                         Log("Client reported mirrored built-in Player One revive.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EGameOverStarted:
+                    if (MultiplayerSession.IsClient)
+                    {
+                        _clientGameOverStartSignalReceived = true;
+                        _clientGameOverStartedAt = Time.unscaledTime;
+                        Log("Received host boss-loss/retry smoke start.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2EGameOverObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientGameOverObservedSignalReceived = true;
+                        Log("Client reported the synced game-over retry menu.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2ERetryClicked:
+                    if (MultiplayerSession.IsClient)
+                    {
+                        _clientRetryClickSignalReceived = true;
+                        _clientRetryClickedAt = Time.unscaledTime;
+                        Log("Received host Retry click signal.");
+                    }
+                    return true;
+                case SessionSignalKind.LanSteamE2ERetryObserved:
+                    if (MultiplayerSession.IsHost)
+                    {
+                        _clientRetryObservedSignalReceived = true;
+                        Log("Client reported successful post-Retry level reload.");
                     }
                     return true;
                 default:
@@ -973,10 +1031,7 @@ namespace CupheadOnline.Sync
             {
                 if (_clientUnpauseSignalReceived)
                 {
-                    SendHostCheckpointSignal();
-                    Time.timeScale = 0f;
-                    SetStage(Stage.Done, "PAUSE/RESUME SYNC PASS.");
-                    Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+                    SetStage(Stage.GameOverRetry, "PAUSE/RESUME SYNC PASS; forcing boss loss to verify Retry.");
                     return;
                 }
 
@@ -989,6 +1044,154 @@ namespace CupheadOnline.Sync
 
             if (!_hostPauseObserved && TimedOut(PauseTimeout))
                 Fail("Host did not enter the level pause menu after pressing pause.");
+        }
+
+        static void GameOverRetry()
+        {
+            _hostAxis = Vector2.zero;
+            _hostButtons &= ~ButtonMask(CupheadButton.Shoot);
+            CheckRemoteInput();
+
+            string sceneName = SceneManager.GetActiveScene().name;
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+
+            if (!_hostGameOverStartSignalSent)
+            {
+                _hostGameOverStartSignalSent = true;
+                _hostGameOverStartedAt = Time.unscaledTime;
+                _hostRetryStartRetries = SessionSync.LocalRetries;
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EGameOverStarted);
+                Log("Starting boss-loss/retry smoke; both peers will enter the game-over Retry menu.");
+                return;
+            }
+
+            if (!_hostGameOverDeathForced)
+            {
+                if (Time.unscaledTime - _hostGameOverStartedAt < 0.75f)
+                    return;
+
+                if (!ForceBossLoss(p1, p2, "host"))
+                    return;
+
+                _hostGameOverDeathForced = true;
+                Log("Host forced boss-loss game over: P1="
+                    + DescribeLevelPlayer(p1)
+                    + "; P2="
+                    + DescribeLevelPlayer(p2)
+                    + ".");
+                CaptureScreen("host_game_over_forced_" + sceneName);
+                return;
+            }
+
+            if (!_hostGameOverObserved)
+            {
+                if (IsLevelGameOverReady())
+                {
+                    _hostGameOverObserved = true;
+                    Log("Host game-over Retry menu is ready; waiting for client.");
+                    CaptureScreen("host_game_over_ready_" + sceneName);
+                }
+                else if (Time.unscaledTime - _hostGameOverStartedAt > GameOverTimeout)
+                {
+                    Fail("Host did not reach the game-over Retry menu after forced boss loss.");
+                }
+                return;
+            }
+
+            if (!_clientGameOverObservedSignalReceived)
+            {
+                if (Time.unscaledTime - _hostGameOverStartedAt > GameOverTimeout)
+                    Fail("Client did not report the game-over Retry menu.");
+                return;
+            }
+
+            if (!_hostRetryPressed)
+            {
+                SelectRetryOnGameOverMenu();
+                _hostRetryPressed = true;
+                _hostRetryPressedAt = Time.unscaledTime;
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2ERetryClicked);
+                PressHost(CupheadButton.Accept);
+                Log("Host clicked Retry from the game-over menu.");
+                return;
+            }
+
+            if (IsLevelGameOverReady()
+             && Time.unscaledTime - _hostRetryPressedAt > 1.25f
+             && Time.unscaledTime - _hostRetryPressedAt < 4.0f)
+            {
+                SelectRetryOnGameOverMenu();
+                PressHost(CupheadButton.Accept);
+                Log("Host Retry menu was still ready; pressed Retry again.");
+            }
+
+            if (Time.unscaledTime - _hostRetryPressedAt > RetryTimeout)
+            {
+                Fail("Host did not reload the level after clicking Retry.");
+                return;
+            }
+
+            if (LevelStartSync.IsHostWaitingForGuestStart
+             || (Time.timeScale == 0f && PauseManager.state != PauseManager.State.Paused))
+            {
+                return;
+            }
+
+            if (_hostRetryReloadVerified)
+            {
+                if (_clientRetryObservedSignalReceived)
+                {
+                    Time.timeScale = 0f;
+                    SetStage(Stage.Done, "GAME OVER RETRY SYNC PASS.");
+                    Plugin.Log.LogInfo("[LanSteamE2E] HOST PASS");
+                }
+                return;
+            }
+
+            if (!sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
+                return;
+
+            p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
+            p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (!IsAliveLevelPlayer(p1) || !IsAliveLevelPlayer(p2))
+                return;
+
+            if (!ValidateBuiltInPlayerUniqueness("host post-retry reload"))
+                return;
+
+            string bossName;
+            float bossHealth;
+            float bossTotal;
+            bool hasBossHealth = BossHealthBarOverlay.TryGetPrimaryBossHealth(out bossName, out bossHealth, out bossTotal);
+            if (!hasBossHealth && Time.unscaledTime - _hostRetryPressedAt > 6f)
+            {
+                Fail("Host reloaded after Retry but could not read boss health.");
+                return;
+            }
+
+            if (SessionSync.LocalRetries <= _hostRetryStartRetries)
+            {
+                if (Time.unscaledTime - _hostRetryPressedAt > 4f)
+                {
+                    Fail("Host Retry click reloaded the level but did not increment retry stats.");
+                    return;
+                }
+
+                return;
+            }
+
+            _hostRetryReloadVerified = true;
+            Log("Host verified post-Retry reload: retries="
+                + SessionSync.LocalRetries
+                + "; P1="
+                + DescribeLevelPlayer(p1)
+                + "; P2="
+                + DescribeLevelPlayer(p2)
+                + "; boss="
+                + (hasBossHealth ? bossName + " " + bossHealth.ToString("0.##") + "/" + bossTotal.ToString("0.##") : "pending")
+                + ".");
+            CaptureScreen("host_retry_reload_" + sceneName);
         }
 
         static void ClientObserve()
@@ -1071,6 +1274,13 @@ namespace CupheadOnline.Sync
 
             var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
             var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+
+            if (IsClientInGameOverRetrySmoke())
+            {
+                RunClientGameOverRetryObserver(sceneName, p1, p2);
+                return;
+            }
+
             if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
                 return;
 
@@ -1177,19 +1387,119 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            Log((_remoteCheckpointReceived ? "Client host-checkpoint pause/resume sync complete" : "Client pause/resume sync complete")
-                + ": P1=" + DescribeLevelPlayer(p1)
-                + "; P2=" + DescribeLevelPlayer(p2)
-                + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
-            if (!_clientCapturedFightEnd)
+            if (!_clientPauseResumeCompleteLogged)
             {
-                _clientCapturedFightEnd = true;
-                CaptureScreen("client_fight_end_" + sceneName);
+                _clientPauseResumeCompleteLogged = true;
+                Log((_remoteCheckpointReceived ? "Client host-checkpoint pause/resume sync complete" : "Client pause/resume sync complete")
+                    + ": P1=" + DescribeLevelPlayer(p1)
+                    + "; P2=" + DescribeLevelPlayer(p2)
+                    + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
+                if (!_clientCapturedFightEnd)
+                {
+                    _clientCapturedFightEnd = true;
+                    CaptureScreen("client_fight_end_" + sceneName);
+                }
             }
 
-            Time.timeScale = 0f;
-            SetStage(Stage.Done, "CLIENT PASS.");
-            Plugin.Log.LogInfo("[LanSteamE2E] CLIENT PASS");
+            if (!_clientGameOverStartSignalReceived
+             && _clientFightReleasedAt > 0f
+             && Time.unscaledTime - _clientFightReleasedAt > FightDuration + PauseTimeout + GameOverTimeout + RetryTimeout)
+            {
+                Fail("Client completed pause/resume but never received the boss-loss/retry smoke start.");
+            }
+        }
+
+        static bool IsClientInGameOverRetrySmoke()
+        {
+            return _clientGameOverStartSignalReceived
+                || _clientGameOverDeathForced
+                || _clientGameOverObservedSignalSent
+                || _clientRetryClickSignalReceived
+                || _clientRetryObservedSignalSent;
+        }
+
+        static void RunClientGameOverRetryObserver(string sceneName, LevelPlayerController p1, LevelPlayerController p2)
+        {
+            _clientAxis = Vector2.zero;
+            _clientButtons &= ~ButtonMask(CupheadButton.Shoot);
+
+            if (!_clientGameOverDeathForced)
+            {
+                if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
+                    return;
+
+                if (!ForceBossLoss(p1, p2, "client"))
+                    return;
+
+                _clientGameOverDeathForced = true;
+                Log("Client forced mirrored boss-loss game over: P1="
+                    + DescribeLevelPlayer(p1)
+                    + "; P2="
+                    + DescribeLevelPlayer(p2)
+                    + ".");
+                CaptureScreen("client_game_over_forced_" + sceneName);
+                return;
+            }
+
+            if (!_clientGameOverObservedSignalSent)
+            {
+                if (IsLevelGameOverReady())
+                {
+                    _clientGameOverObservedSignalSent = true;
+                    Log("Client game-over Retry menu is ready.");
+                    CaptureScreen("client_game_over_ready_" + sceneName);
+                    SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EGameOverObserved);
+                }
+                else if (Time.unscaledTime - _clientGameOverStartedAt > GameOverTimeout)
+                {
+                    Fail("Client did not reach the game-over Retry menu after forced boss loss.");
+                }
+                return;
+            }
+
+            if (!_clientRetryClickSignalReceived)
+                return;
+
+            if (Time.unscaledTime - _clientRetryClickedAt > RetryTimeout)
+            {
+                Fail("Client did not reload the level after host clicked Retry.");
+                return;
+            }
+
+            if (LevelStartSync.IsClientWaitingForStartRelease
+             || (Time.timeScale == 0f && PauseManager.state != PauseManager.State.Paused))
+            {
+                return;
+            }
+
+            if (IsLevelGameOverActive())
+                return;
+
+            if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
+                return;
+
+            if (!IsAliveLevelPlayer(p1) || !IsAliveLevelPlayer(p2))
+                return;
+
+            if (!ValidateBuiltInPlayerUniqueness("client post-retry reload"))
+                return;
+
+            if (!_clientRetryObservedSignalSent)
+            {
+                _clientRetryObservedSignalSent = true;
+                Log("Client verified post-Retry reload: P1="
+                    + DescribeLevelPlayer(p1)
+                    + "; P2="
+                    + DescribeLevelPlayer(p2)
+                    + "; boss="
+                    + BossHealthBarOverlay.GetDebugSummary()
+                    + ".");
+                CaptureScreen("client_retry_reload_" + sceneName);
+                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2ERetryObserved);
+                Time.timeScale = 0f;
+                SetStage(Stage.Done, "CLIENT GAME OVER RETRY PASS.");
+                Plugin.Log.LogInfo("[LanSteamE2E] CLIENT PASS");
+            }
         }
 
         static void SendHostCheckpointSignal()
@@ -1408,6 +1718,74 @@ namespace CupheadOnline.Sync
                 && gui.state == AbstractPauseGUI.State.Unpaused;
         }
 
+        static bool IsLevelGameOverActive()
+        {
+            var gui = LevelGameOverGUI.Current;
+            return gui != null && gui.gameObject != null && gui.gameObject.activeInHierarchy;
+        }
+
+        static bool IsLevelGameOverReady()
+        {
+            var gui = LevelGameOverGUI.Current;
+            if (gui == null || gui.gameObject == null || !gui.gameObject.activeInHierarchy)
+                return false;
+
+            if (LevelGameOverStateField == null)
+                return true;
+
+            object raw = LevelGameOverStateField.GetValue(gui);
+            return raw != null && string.Equals(raw.ToString(), "Ready", StringComparison.Ordinal);
+        }
+
+        static void SelectRetryOnGameOverMenu()
+        {
+            var gui = LevelGameOverGUI.Current;
+            if (gui == null || LevelGameOverSelectionField == null)
+                return;
+
+            try { LevelGameOverSelectionField.SetValue(gui, 0); }
+            catch { }
+        }
+
+        static bool IsAliveLevelPlayer(LevelPlayerController player)
+        {
+            return player != null
+                && player.stats != null
+                && !player.IsDead
+                && player.stats.Health > 0
+                && player.gameObject != null
+                && player.gameObject.activeInHierarchy;
+        }
+
+        static bool ForceBossLoss(LevelPlayerController p1, LevelPlayerController p2, string side)
+        {
+            if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
+            {
+                Fail("Cannot force boss loss on " + side + "; both built-in players are not available.");
+                return false;
+            }
+
+            if (!ForceBuiltInPlayerDeath(p1, side + " Player One"))
+                return false;
+            if (!ForceBuiltInPlayerDeath(p2, side + " Player Two"))
+                return false;
+
+            if (!IsLevelGameOverActive())
+            {
+                try
+                {
+                    LevelEnd.Lose(false, false);
+                }
+                catch (Exception ex)
+                {
+                    Fail("Could not open game-over Retry menu on " + side + ": " + ex.Message + ".");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         static void RestoreScriptedPlayerHealth(LevelPlayerController player)
         {
             if (player == null || player.stats == null || player.IsDead || player.stats.HealthMax <= 0)
@@ -1426,7 +1804,7 @@ namespace CupheadOnline.Sync
             if (sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
             {
                 _clientAxis = Vector2.zero;
-                _clientButtons = ButtonMask(CupheadButton.Shoot);
+                _clientButtons = IsClientInGameOverRetrySmoke() ? 0u : ButtonMask(CupheadButton.Shoot);
                 _clientDownButtons = 0u;
                 return;
             }
@@ -2398,6 +2776,7 @@ namespace CupheadOnline.Sync
                 _clientPauseSignalReceived = false;
                 _clientUnpauseObserved = false;
                 _clientUnpauseSignalReceived = false;
+                _clientPauseResumeCompleteLogged = false;
                 _clientP2MapActivationBlocked = false;
                 _clientReviveTestStartSignalReceived = false;
                 _clientReviveDeathForced = false;
@@ -2429,6 +2808,18 @@ namespace CupheadOnline.Sync
                 _hostReverseReviveAnimCompleteTriggered = false;
                 _hostReverseReviveVerified = false;
                 _hostFightTimerResetAfterRevive = false;
+                _hostGameOverStartSignalSent = false;
+                _hostGameOverDeathForced = false;
+                _hostGameOverObserved = false;
+                _hostRetryPressed = false;
+                _hostRetryReloadVerified = false;
+                _clientGameOverStartSignalReceived = false;
+                _clientGameOverDeathForced = false;
+                _clientGameOverObservedSignalSent = false;
+                _clientGameOverObservedSignalReceived = false;
+                _clientRetryClickSignalReceived = false;
+                _clientRetryObservedSignalSent = false;
+                _clientRetryObservedSignalReceived = false;
                 _hostDialogueInteractPressed = false;
                 _hostDialogueForceStarted = false;
                 _clientDialogueInteractPressed = false;
@@ -2455,6 +2846,11 @@ namespace CupheadOnline.Sync
                 _hostPauseObservedAt = 0f;
                 _clientUnpauseObservedAt = 0f;
                 _hostUnpauseObservedAt = 0f;
+                _hostGameOverStartedAt = 0f;
+                _hostRetryPressedAt = 0f;
+                _clientGameOverStartedAt = 0f;
+                _clientRetryClickedAt = 0f;
+                _hostRetryStartRetries = 0;
                 _hasFightStartBossHealth = false;
                 _fightStartBossName = string.Empty;
                 _fightStartBossHealth = 0f;
