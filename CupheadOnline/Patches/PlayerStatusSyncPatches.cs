@@ -60,16 +60,17 @@ namespace CupheadOnline.Patches
     [HarmonyPatch(typeof(PlayerDeathEffect), "OnReviveParryAnimComplete")]
     public static class PlayerDeathEffectExtraVisualParryAnimPatch
     {
-        static bool Prefix(PlayerDeathEffect __instance)
+        static bool Prefix(PlayerDeathEffect __instance, out bool __state)
         {
+            __state = ParticipantReviveController.BeginHostBuiltInParryAnimComplete(__instance);
             if (ExtraParticipantReviveVisuals.HandleParryAnimComplete(__instance))
                 return false;
             return !ParticipantReviveController.TrySuppressClientRemoteBuiltInParryAnimComplete(__instance);
         }
 
-        static void Postfix(PlayerDeathEffect __instance)
+        static void Postfix(PlayerDeathEffect __instance, bool __state)
         {
-            ParticipantReviveController.NotifyBuiltInParryAnimComplete(__instance);
+            ParticipantReviveController.NotifyBuiltInParryAnimComplete(__instance, __state);
         }
     }
 

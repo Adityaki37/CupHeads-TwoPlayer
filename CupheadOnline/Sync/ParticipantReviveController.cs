@@ -37,6 +37,8 @@ namespace CupheadOnline.Sync
         const float DeathHeartParryPauseSeconds = 0.185f;
         const float DeathHeartParryCatchUpCapSeconds = 0.3f;
         const float DeathHeartParryOffsetToleranceSeconds = 0.03f;
+        const float BuiltInFinalStatusMinSettleSeconds = 0.45f;
+        const float BuiltInFinalStatusMaxSettleSeconds = 1.25f;
 
         static readonly List<PlayerDeathEffect> ScratchDeathEffects =
             new List<PlayerDeathEffect>(4);
@@ -63,6 +65,7 @@ namespace CupheadOnline.Sync
         static float _revivePauseCatchUpUntil = -1f;
         static bool _revivePauseCatchUpActive;
         static bool _deferHostBuiltInReviveStatus;
+        static int _hostBuiltInReviveStatusSuppressDepth;
 
         static ParticipantReviveController()
         {
@@ -84,14 +87,21 @@ namespace CupheadOnline.Sync
             _revivePauseCatchUpUntil = -1f;
             _revivePauseCatchUpActive = false;
             _deferHostBuiltInReviveStatus = false;
+            _hostBuiltInReviveStatusSuppressDepth = 0;
         }
 
         public static bool ShouldSuppressHostBuiltInImmediateReviveStatus(AbstractPlayerController player)
         {
-            return _deferHostBuiltInReviveStatus
-                && MultiplayerSession.IsHost
-                && player != null
-                && player.id <= PlayerId.PlayerTwo;
+            if (!MultiplayerSession.IsHost || player == null || player.id > PlayerId.PlayerTwo)
+                return false;
+
+            if (IsHostBuiltInReviveStatusSuppressed())
+                return true;
+
+            return PendingBuiltInFinalStatusTicks.ContainsKey(player.id)
+                && player.stats != null
+                && player.stats.Health > 0
+                && !player.IsDead;
         }
 
         public static bool TryOverrideReviveOutOfFrame(PlayerDeathEffect effect)
@@ -271,59 +281,86 @@ namespace CupheadOnline.Sync
                 + ").");
         }
 
-        public static void NotifyBuiltInParryAnimComplete(PlayerDeathEffect effect)
+        public static bool BeginHostBuiltInParryAnimComplete(PlayerDeathEffect effect)
         {
-            if (!MultiplayerSession.IsActive
-             || !MultiplayerSession.IsHost
-             || Plugin.Net == null
-             || !Plugin.Net.IsConnected
-             || effect == null)
-            {
-                return;
-            }
-
-            ExtraParticipantDeathBubbleTag extraTag;
-            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
-                return;
-
             PlayerId targetPlayerId;
-            if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
-                return;
-            if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
-                return;
+            if (!ShouldHandleHostBuiltInParryAnimComplete(effect, out targetPlayerId))
+                return false;
 
-            var target = GetPlayerSafe(targetPlayerId);
-            if (target == null || target.stats == null)
-                return;
-            if (!target.IsDead && target.stats.Health > 0 && target.gameObject != null && target.gameObject.activeInHierarchy)
-                return;
+            _hostBuiltInReviveStatusSuppressDepth++;
+            return true;
+        }
 
-            PlayerId donorPlayerId = targetPlayerId == PlayerId.PlayerOne
-                ? PlayerId.PlayerTwo
-                : PlayerId.PlayerOne;
-            Vector2 revivePosition = effect.transform.position;
-
-            _deferHostBuiltInReviveStatus = true;
+        public static void NotifyBuiltInParryAnimComplete(PlayerDeathEffect effect, bool hostSuppressionStarted)
+        {
             try
             {
-                ResolveHostReviveRequest(
-                    (byte)donorPlayerId,
-                    revivePosition,
-                    MultiplayerSession.Tick,
-                    Plugin.Net);
+                PlayerId targetPlayerId;
+                if (!ShouldHandleHostBuiltInParryAnimComplete(effect, out targetPlayerId))
+                    return;
 
-                if (target.IsDead
-                 || target.stats.Health <= 0
-                 || target.gameObject == null
-                 || !target.gameObject.activeInHierarchy)
+                bool localSuppressionStarted = !hostSuppressionStarted;
+                if (localSuppressionStarted)
+                    _hostBuiltInReviveStatusSuppressDepth++;
+
+                try
                 {
-                    ApplyLocalRevive(targetPlayerId, revivePosition);
+                    CompleteHostBuiltInParryAnim(effect, targetPlayerId);
+                }
+                finally
+                {
+                    if (localSuppressionStarted)
+                        EndHostBuiltInReviveStatusSuppression();
                 }
             }
             finally
             {
-                _deferHostBuiltInReviveStatus = false;
+                if (hostSuppressionStarted)
+                    EndHostBuiltInReviveStatusSuppression();
             }
+        }
+
+        static void CompleteHostBuiltInParryAnim(PlayerDeathEffect effect, PlayerId targetPlayerId)
+        {
+            var target = GetPlayerSafe(targetPlayerId);
+            if (target == null || target.stats == null)
+                return;
+
+            bool alreadyRevived = !target.IsDead
+                && target.stats.Health > 0
+                && target.gameObject != null
+                && target.gameObject.activeInHierarchy;
+
+            if (!alreadyRevived)
+            {
+                PlayerId donorPlayerId = targetPlayerId == PlayerId.PlayerOne
+                    ? PlayerId.PlayerTwo
+                    : PlayerId.PlayerOne;
+                Vector2 revivePosition = effect.transform.position;
+
+                _deferHostBuiltInReviveStatus = true;
+                try
+                {
+                    ResolveHostReviveRequest(
+                        (byte)donorPlayerId,
+                        revivePosition,
+                        MultiplayerSession.Tick,
+                        Plugin.Net);
+
+                    if (target.IsDead
+                     || target.stats.Health <= 0
+                     || target.gameObject == null
+                     || !target.gameObject.activeInHierarchy)
+                    {
+                        ApplyLocalRevive(targetPlayerId, revivePosition);
+                    }
+                }
+                finally
+                {
+                    _deferHostBuiltInReviveStatus = false;
+                }
+            }
+
             QueueBuiltInFinalStatus(targetPlayerId);
 
             Plugin.Log.LogInfo(
@@ -773,6 +810,15 @@ namespace CupheadOnline.Sync
             return true;
         }
 
+        public static bool IsUnsettledBuiltInReviveStatus(PlayerStatusPacket pkt)
+        {
+            return pkt.ParticipantId <= (byte)PlayerId.PlayerTwo
+                && !pkt.IsDead
+                && pkt.Health > 0
+                && pkt.HasPosition
+                && pkt.PosY > -225f;
+        }
+
         public static void RestoreSuppressedBuiltInBody(LevelPlayerController player)
         {
             if (player == null)
@@ -1009,7 +1055,7 @@ namespace CupheadOnline.Sync
 
             RecentBuiltInRevives[localPlayerId] = Time.unscaledTime + 2.0f;
 
-            bool deferBuiltInStatus = _deferHostBuiltInReviveStatus
+            bool deferBuiltInStatus = IsHostBuiltInReviveStatusSuppressed()
                 && MultiplayerSession.IsHost
                 && localPlayerId <= PlayerId.PlayerTwo;
 
@@ -1031,9 +1077,19 @@ namespace CupheadOnline.Sync
 
         static IEnumerator PushBuiltInFinalStatusAfterSettle(PlayerId playerId, uint tick)
         {
-            float endAt = Time.unscaledTime + 0.45f;
-            while (Time.unscaledTime < endAt)
+            float minEndAt = Time.unscaledTime + BuiltInFinalStatusMinSettleSeconds;
+            float maxEndAt = Time.unscaledTime + BuiltInFinalStatusMaxSettleSeconds;
+            while (Time.unscaledTime < maxEndAt)
+            {
+                if (Time.unscaledTime >= minEndAt)
+                {
+                    var current = GetPlayerSafe(playerId);
+                    if (current != null && IsBuiltInReviveSettled(current))
+                        break;
+                }
+
                 yield return null;
+            }
 
             uint latestTick;
             if (!PendingBuiltInFinalStatusTicks.TryGetValue(playerId, out latestTick)
@@ -1046,6 +1102,51 @@ namespace CupheadOnline.Sync
             var player = GetPlayerSafe(playerId);
             if (player != null)
                 ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static bool IsHostBuiltInReviveStatusSuppressed()
+        {
+            return _deferHostBuiltInReviveStatus || _hostBuiltInReviveStatusSuppressDepth > 0;
+        }
+
+        static void EndHostBuiltInReviveStatusSuppression()
+        {
+            if (_hostBuiltInReviveStatusSuppressDepth > 0)
+                _hostBuiltInReviveStatusSuppressDepth--;
+        }
+
+        static bool IsBuiltInReviveSettled(AbstractPlayerController player)
+        {
+            if (player == null)
+                return false;
+
+            var levelPlayer = player as LevelPlayerController;
+            if (levelPlayer != null && levelPlayer.motor != null && levelPlayer.motor.Grounded)
+                return true;
+
+            return player.transform.position.y <= -225f;
+        }
+
+        static bool ShouldHandleHostBuiltInParryAnimComplete(PlayerDeathEffect effect, out PlayerId targetPlayerId)
+        {
+            targetPlayerId = PlayerId.PlayerOne;
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsHost
+             || Plugin.Net == null
+             || !Plugin.Net.IsConnected
+             || effect == null)
+            {
+                return false;
+            }
+
+            ExtraParticipantDeathBubbleTag extraTag;
+            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
+                return false;
+
+            if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
+                return false;
+
+            return targetPlayerId == PlayerId.PlayerOne || targetPlayerId == PlayerId.PlayerTwo;
         }
 
         static bool TryGetHostRevivePosition(PlayerId playerId, out Vector2 position)

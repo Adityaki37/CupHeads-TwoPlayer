@@ -49,6 +49,7 @@ namespace CupheadOnline.Sync
         const float DialogueTimeout = 10f;
         const float PauseTimeout = 8f;
         const float ReviveSmokeTimeout = 12f;
+        const float ReviveSettledY = -225f;
         const float GameOverTimeout = 12f;
         const float RetryTimeout = 35f;
         const float LevelStartVisualSyncTimeout = 20f;
@@ -2640,6 +2641,16 @@ namespace CupheadOnline.Sync
                 && player.gameObject.activeInHierarchy;
         }
 
+        static bool IsScriptedReviveBodySettled(LevelPlayerController player)
+        {
+            if (!IsAliveLevelPlayer(player))
+                return false;
+            if (player.motor != null && player.motor.Grounded)
+                return true;
+
+            return player.transform.position.y <= ReviveSettledY;
+        }
+
         static bool ForceBossLoss(LevelPlayerController p1, LevelPlayerController p2, string side)
         {
             if (p1 == null || p2 == null || p1.stats == null || p2.stats == null)
@@ -3169,6 +3180,13 @@ namespace CupheadOnline.Sync
                     return false;
                 }
 
+                if (!IsScriptedReviveBodySettled(p2))
+                {
+                    if (Time.unscaledTime - _hostReviveDeathAt > ReviveSmokeTimeout)
+                        Fail("Host Player Two revived but did not settle after the built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
+                    return false;
+                }
+
                 _hostReviveVerified = true;
                 _hostReviveVerifiedAt = Time.unscaledTime;
                 ParticipantStatusTracker.PushLocalStatus(p2);
@@ -3275,6 +3293,13 @@ namespace CupheadOnline.Sync
                     return false;
                 }
 
+                if (!IsScriptedReviveBodySettled(p1))
+                {
+                    if (Time.unscaledTime - _hostReverseReviveDeathAt > ReviveSmokeTimeout)
+                        Fail("Host Player One revived but did not settle after the reverse built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
+                    return false;
+                }
+
                 _hostReverseReviveVerified = true;
                 _hostReverseReviveVerifiedAt = Time.unscaledTime;
                 ParticipantStatusTracker.PushLocalStatus(p1);
@@ -3338,6 +3363,13 @@ namespace CupheadOnline.Sync
                 return;
             }
 
+            if (!IsScriptedReviveBodySettled(p2))
+            {
+                if (Time.unscaledTime - _clientReviveDeathAt > ReviveSmokeTimeout)
+                    Fail("Client Player Two revived but did not settle after the host built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
+                return;
+            }
+
             _clientReviveMirrorVerified = true;
             _clientFightReleasedAt = Time.unscaledTime;
             Log("Verified client Player Two revived from the host built-in parry status: " + DescribeLevelPlayer(p2) + ".");
@@ -3398,6 +3430,13 @@ namespace CupheadOnline.Sync
             {
                 if (Time.unscaledTime - _clientReverseReviveDeathAt > ReviveSmokeTimeout)
                     Fail("Client Player One stayed dead after the reverse host built-in parry revive.");
+                return;
+            }
+
+            if (!IsScriptedReviveBodySettled(p1))
+            {
+                if (Time.unscaledTime - _clientReverseReviveDeathAt > ReviveSmokeTimeout)
+                    Fail("Client Player One revived but did not settle after the reverse host built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
                 return;
             }
 

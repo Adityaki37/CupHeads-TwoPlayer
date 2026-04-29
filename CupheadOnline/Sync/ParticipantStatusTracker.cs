@@ -51,6 +51,8 @@ namespace CupheadOnline.Sync
 
             ParticipantStatus existing;
             bool hasExisting = _statuses.TryGetValue(pkt.ParticipantId, out existing);
+            if (hasExisting && ShouldWaitForSettledRemoteHostBuiltInRevive(existing, pkt, fromRemote))
+                return;
             bool acceptHostBuiltInRevive = hasExisting && ShouldAcceptRemoteHostBuiltInRevive(existing, pkt, fromRemote);
             if (!acceptHostBuiltInRevive
              && ShouldIgnoreRemoteAliveStatusWhileLocallyDead(existing, pkt, fromRemote, hasExisting))
@@ -172,6 +174,37 @@ namespace CupheadOnline.Sync
                 + " despite independent local tick ordering: localTick="
                 + existing.Tick
                 + " hostTick="
+                + pkt.Tick
+                + ".");
+            return true;
+        }
+
+        static bool ShouldWaitForSettledRemoteHostBuiltInRevive(
+            ParticipantStatus existing,
+            PlayerStatusPacket pkt,
+            bool fromRemote)
+        {
+            if (!fromRemote
+             || !MultiplayerSession.IsClient
+             || pkt.ParticipantId > (byte)PlayerId.PlayerTwo
+             || !existing.IsDead
+             || pkt.IsDead
+             || pkt.Health <= 0)
+            {
+                return false;
+            }
+
+            if (!ParticipantReviveController.IsUnsettledBuiltInReviveStatus(pkt))
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[StatusSync] Waiting for settled host revive status for local "
+                + (PlayerId)pkt.ParticipantId
+                + ": pos=("
+                + pkt.PosX.ToString("0.00")
+                + ","
+                + pkt.PosY.ToString("0.00")
+                + ") tick="
                 + pkt.Tick
                 + ".");
             return true;
