@@ -55,6 +55,7 @@ namespace CupheadOnline.Sync
         const float LevelStartVisualSyncTolerance = 0.55f;
         const float FightIntroReadyGrace = 0.75f;
         const float ScriptedStartLatencyCompensation = 1f;
+        const float VisualPositionSampleInterval = 0.0625f;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -2082,7 +2083,7 @@ namespace CupheadOnline.Sync
                 return;
 
             float now = Time.unscaledTime;
-            if (lastSampleAt > 0f && now - lastSampleAt < 2f)
+            if (lastSampleAt > 0f && now - lastSampleAt < VisualPositionSampleInterval)
                 return;
 
             lastSampleAt = now;

@@ -226,6 +226,7 @@ namespace CupheadOnline.Sync
             string characterName = GetCharacterName(player);
             if (player.stats.isChalice) flags |= 4;
             if (characterName == "Mugman") flags |= 8;
+            Vector3 position = player.transform.position;
 
             pkt = new PlayerStatusPacket
             {
@@ -234,6 +235,8 @@ namespace CupheadOnline.Sync
                 HealthMax = (byte)Mathf.Max(healthMax, 1),
                 Flags = flags,
                 Tick = MultiplayerSession.Tick,
+                PosX = position.x,
+                PosY = position.y,
             };
             return true;
         }
@@ -261,6 +264,8 @@ namespace CupheadOnline.Sync
         {
             PlayerStatusPacket pkt;
             if (!TryBuildLocalPacket(player, out pkt))
+                return;
+            if (ParticipantReviveController.ShouldSuppressHostBuiltInImmediateReviveStatus(player))
                 return;
             if (ParticipantReviveController.ShouldSuppressRecentBuiltInReviveDeath(pkt, fromRemote: false))
                 return;

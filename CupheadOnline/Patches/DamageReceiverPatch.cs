@@ -57,7 +57,15 @@ namespace CupheadOnline.Patches
             bool highLatencyBuiltInSync = HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
                 && player.id <= PlayerId.PlayerTwo;
             if (highLatencyBuiltInSync)
-                return MultiplayerSession.IsHost || DamageAuthority.IsAuthorised(__instance, info);
+            {
+                // High-latency vanilla mode advances both built-in players and the
+                // boss locally from the same delayed timeline. Let local collision
+                // knockback run on both peers so player positions stay visually
+                // aligned, but ignore the later host replay to avoid double damage.
+                if (DamageAuthority.IsApplyingAuthorizedDamage)
+                    return false;
+                return true;
+            }
 
             if (!Plugin.LatencyFriendlyDamage)
             {

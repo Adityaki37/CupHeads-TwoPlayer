@@ -786,6 +786,105 @@ Copy-Item -LiteralPath $hostLog -Destination $hostLogCopy -Force -ErrorAction Si
 Copy-Item -LiteralPath $clientLog -Destination $clientLogCopy -Force -ErrorAction SilentlyContinue
 $hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Released level start|Local level start gate|Guest-only shooting smoke|Fight smoke complete|pause menu|resume|pause sync|PAUSE/RESUME|game-over|Game-over|Retry|GAME OVER RETRY|HOST PASS|FAIL" } | Select-Object -Last 24) -join "`n"
 $clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Host released level start|Local level start gate|Client host-checkpoint pause/resume sync complete|Client pause/resume sync complete|pause menu|resume|game-over|Game-over|Retry|CLIENT GAME OVER RETRY|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout|Simulation drift detected|Host snapshots stalled" } | Select-Object -Last 24) -join "`n"
+
+function Parse-VisualPlayerSamples([string]$text, [string]$role) {
+    $samples = @()
+    $pattern = "Visual sample $role clock=(?<clock>-?\d+(?:\.\d+)?).*?P1=.*? dead=(?<p1dead>True|False) .*? pos=\((?<p1x>-?\d+(?:\.\d+)?),(?<p1y>-?\d+(?:\.\d+)?)\); P2=.*? dead=(?<p2dead>True|False) .*? pos=\((?<p2x>-?\d+(?:\.\d+)?),(?<p2y>-?\d+(?:\.\d+)?)\)"
+    foreach ($line in ($text -split "`r?`n")) {
+        $m = [regex]::Match($line, $pattern)
+        if (!$m.Success) { continue }
+        $samples += [pscustomobject]@{
+            Clock = [double]$m.Groups['clock'].Value
+            P1Dead = [bool]::Parse($m.Groups['p1dead'].Value)
+            P1X = [double]$m.Groups['p1x'].Value
+            P1Y = [double]$m.Groups['p1y'].Value
+            P2Dead = [bool]::Parse($m.Groups['p2dead'].Value)
+            P2X = [double]$m.Groups['p2x'].Value
+            P2Y = [double]$m.Groups['p2y'].Value
+            Line = $line
+        }
+    }
+
+    if ($samples.Count -le 1) { return @($samples) }
+
+    $epochs = @()
+    $current = @()
+    $previousClock = $null
+    foreach ($sample in $samples) {
+        if ($null -ne $previousClock -and $sample.Clock -lt ($previousClock - 0.25)) {
+            if ($current.Count -gt 0) { $epochs += ,@($current) }
+            $current = @()
+        }
+
+        $current += $sample
+        $previousClock = $sample.Clock
+    }
+    if ($current.Count -gt 0) { $epochs += ,@($current) }
+
+    $bestEpoch = @($samples)
+    $bestCount = -1
+    foreach ($epoch in $epochs) {
+        if ($epoch.Count -ge $bestCount) {
+            $bestCount = $epoch.Count
+            $bestEpoch = @($epoch)
+        }
+    }
+
+    return @($bestEpoch)
+}
+
+function Measure-PlayerPositionSync([object[]]$hostSamples, [object[]]$clientSamples) {
+    $matches = @()
+    $mismatches = @()
+    $maxDelta = 0.0
+    foreach ($hostSample in $hostSamples) {
+        $best = $null
+        $bestClockDelta = [double]::MaxValue
+        foreach ($clientSample in $clientSamples) {
+            $clockDelta = [Math]::Abs($hostSample.Clock - $clientSample.Clock)
+            if ($clockDelta -lt $bestClockDelta) {
+                $bestClockDelta = $clockDelta
+                $best = $clientSample
+            }
+        }
+
+        if ($null -eq $best -or $bestClockDelta -gt 0.20) { continue }
+
+        $p1Delta = [Math]::Sqrt([Math]::Pow($hostSample.P1X - $best.P1X, 2) + [Math]::Pow($hostSample.P1Y - $best.P1Y, 2))
+        $p2Delta = [Math]::Sqrt([Math]::Pow($hostSample.P2X - $best.P2X, 2) + [Math]::Pow($hostSample.P2Y - $best.P2Y, 2))
+        $deadMatch = ($hostSample.P1Dead -eq $best.P1Dead) -and ($hostSample.P2Dead -eq $best.P2Dead)
+        $sample = [pscustomobject]@{
+            HostClock = [Math]::Round($hostSample.Clock, 3)
+            ClientClock = [Math]::Round($best.Clock, 3)
+            ClockDelta = [Math]::Round($bestClockDelta, 3)
+            P1Delta = [Math]::Round($p1Delta, 3)
+            P2Delta = [Math]::Round($p2Delta, 3)
+            DeadMatch = $deadMatch
+            HostP1 = ("{0:0.00},{1:0.00}" -f $hostSample.P1X, $hostSample.P1Y)
+            ClientP1 = ("{0:0.00},{1:0.00}" -f $best.P1X, $best.P1Y)
+            HostP2 = ("{0:0.00},{1:0.00}" -f $hostSample.P2X, $hostSample.P2Y)
+            ClientP2 = ("{0:0.00},{1:0.00}" -f $best.P2X, $best.P2Y)
+        }
+        $matches += $sample
+        $maxDelta = [Math]::Max($maxDelta, [Math]::Max($p1Delta, $p2Delta))
+        if (!$deadMatch -or $p1Delta -gt 35.0 -or $p2Delta -gt 35.0) {
+            $mismatches += $sample
+        }
+    }
+
+    $ratio = if ($matches.Count -gt 0) { [Math]::Round(1.0 - ($mismatches.Count / [double]$matches.Count), 4) } else { 1.0 }
+    return [pscustomobject]@{
+        SampleCount = $matches.Count
+        MismatchCount = $mismatches.Count
+        PassRatio = $ratio
+        MaxDelta = [Math]::Round($maxDelta, 3)
+        Mismatches = $mismatches
+    }
+}
+
+$hostPlayerSamples = Parse-VisualPlayerSamples $hostTextFinal "host"
+$clientPlayerSamples = Parse-VisualPlayerSamples $clientTextFinal "client"
+$playerPositionSync = Measure-PlayerPositionSync $hostPlayerSamples $clientPlayerSamples
 $legacyLoadoutFixtureExercised = $false
 $steamParityFailure = ""
 $syncHealthFailure = ""
@@ -840,6 +939,12 @@ if ($blueObjectGateApplies -and $blueFrames.Count -ge 20 -and $blueSyncPassRatio
     $visualSyncFailure = " Visual frame sync below 95%: blue-object pass ratio " + $blueSyncPassRatio + " (" + ($blueFrames.Count - $blueMismatchFrames.Count) + "/" + $blueFrames.Count + ")."
     $syncHealthFailure = ($syncHealthFailure + $visualSyncFailure).Trim()
 }
+$playerPositionGateApplies = $VisualCombatOnly -and $playerPositionSync.SampleCount -ge 20
+if ($playerPositionGateApplies -and $playerPositionSync.PassRatio -lt 0.95) {
+    $failed = $true
+    $playerPositionFailure = " Player position sync below 95%: pass ratio " + $playerPositionSync.PassRatio + " (" + ($playerPositionSync.SampleCount - $playerPositionSync.MismatchCount) + "/" + $playerPositionSync.SampleCount + "), max delta " + $playerPositionSync.MaxDelta + " world units."
+    $syncHealthFailure = ($syncHealthFailure + $playerPositionFailure).Trim()
+}
 $exactMatchFrames = @($metrics | Where-Object { $_.ExactMismatchPixels -eq 0 })
 $fullMismatchFrames = @($metrics | Where-Object { $_.ExactMismatchPixels -gt 0 })
 $maxOverall = ($metrics | Sort-Object MeanAbsDiffPerChannel -Descending | Select-Object -First 1)
@@ -880,6 +985,12 @@ $report = [pscustomobject]@{
     BlueObjectSyncPassRatio = $blueSyncPassRatio
     BlueObjectSyncEnforced = [bool]$blueObjectGateApplies
     BlueObjectSyncGate = if ($blueObjectGateApplies) { "Slime boss body" } else { "not enforced for target '" + $TargetBossLevel + "'; blue pixels are not a stable boss-body signal" }
+    PlayerPositionSampleCount = $playerPositionSync.SampleCount
+    PlayerPositionMismatchCount = $playerPositionSync.MismatchCount
+    PlayerPositionSyncPassRatio = $playerPositionSync.PassRatio
+    PlayerPositionMaxDeltaWorld = $playerPositionSync.MaxDelta
+    PlayerPositionSyncEnforced = [bool]$playerPositionGateApplies
+    PlayerPositionMismatchSamples = $playerPositionSync.Mismatches
     ExactFullFrameMatchCount = $exactMatchFrames.Count
     ExactFullFrameMismatchCount = $fullMismatchFrames.Count
     ExactFullFrameMatch = $fullMismatchFrames.Count -eq 0

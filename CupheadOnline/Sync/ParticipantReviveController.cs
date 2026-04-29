@@ -52,12 +52,17 @@ namespace CupheadOnline.Sync
             new Dictionary<PlayerId, float>();
         static readonly Dictionary<PlayerId, uint> PendingHostBuiltInReviveTicks =
             new Dictionary<PlayerId, uint>();
+        static readonly Dictionary<PlayerId, Vector2> PendingHostBuiltInRevivePositions =
+            new Dictionary<PlayerId, Vector2>();
         static readonly Dictionary<PlayerId, float> RecentBuiltInRevives =
             new Dictionary<PlayerId, float>();
+        static readonly Dictionary<PlayerId, uint> PendingBuiltInFinalStatusTicks =
+            new Dictionary<PlayerId, uint>();
         static readonly Dictionary<PlayerId, Dictionary<Renderer, bool>> SuppressedBuiltInBodyRenderers =
             new Dictionary<PlayerId, Dictionary<Renderer, bool>>();
         static float _revivePauseCatchUpUntil = -1f;
         static bool _revivePauseCatchUpActive;
+        static bool _deferHostBuiltInReviveStatus;
 
         static ParticipantReviveController()
         {
@@ -73,9 +78,20 @@ namespace CupheadOnline.Sync
             ClientRemoteBuiltInParryStartedAt.Clear();
             MirroredBuiltInParryVisualAt.Clear();
             PendingHostBuiltInReviveTicks.Clear();
+            PendingHostBuiltInRevivePositions.Clear();
+            PendingBuiltInFinalStatusTicks.Clear();
             RecentBuiltInRevives.Clear();
             _revivePauseCatchUpUntil = -1f;
             _revivePauseCatchUpActive = false;
+            _deferHostBuiltInReviveStatus = false;
+        }
+
+        public static bool ShouldSuppressHostBuiltInImmediateReviveStatus(AbstractPlayerController player)
+        {
+            return _deferHostBuiltInReviveStatus
+                && MultiplayerSession.IsHost
+                && player != null
+                && player.id <= PlayerId.PlayerTwo;
         }
 
         public static bool TryOverrideReviveOutOfFrame(PlayerDeathEffect effect)
@@ -186,7 +202,18 @@ namespace CupheadOnline.Sync
             if (pkt.ApplyDonorCost)
                 ApplyLocalDonorCost(localPlayerId);
             if (pkt.ApplyRevive)
+            {
+                if (ShouldWaitForHostBuiltInReviveStatus(localPlayerId))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Deferred built-in revive grant for "
+                        + localPlayerId
+                        + "; waiting for host final revive status.");
+                    return;
+                }
+
                 ApplyLocalRevive(localPlayerId, new Vector2(pkt.RevivePosX, pkt.RevivePosY));
+            }
         }
 
         public static void NotifyBuiltInParrySwitch(PlayerDeathEffect effect)
@@ -276,19 +303,28 @@ namespace CupheadOnline.Sync
                 : PlayerId.PlayerOne;
             Vector2 revivePosition = effect.transform.position;
 
-            ResolveHostReviveRequest(
-                (byte)donorPlayerId,
-                revivePosition,
-                MultiplayerSession.Tick,
-                Plugin.Net);
-
-            if (target.IsDead
-             || target.stats.Health <= 0
-             || target.gameObject == null
-             || !target.gameObject.activeInHierarchy)
+            _deferHostBuiltInReviveStatus = true;
+            try
             {
-                ApplyLocalRevive(targetPlayerId, revivePosition);
+                ResolveHostReviveRequest(
+                    (byte)donorPlayerId,
+                    revivePosition,
+                    MultiplayerSession.Tick,
+                    Plugin.Net);
+
+                if (target.IsDead
+                 || target.stats.Health <= 0
+                 || target.gameObject == null
+                 || !target.gameObject.activeInHierarchy)
+                {
+                    ApplyLocalRevive(targetPlayerId, revivePosition);
+                }
             }
+            finally
+            {
+                _deferHostBuiltInReviveStatus = false;
+            }
+            QueueBuiltInFinalStatus(targetPlayerId);
 
             Plugin.Log.LogInfo(
                 "[ReviveSync] Resolved host built-in revive for "
@@ -369,7 +405,8 @@ namespace CupheadOnline.Sync
                 return false;
             if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
                 return false;
-            if (MultiplayerSession.IsAuthoritativePlayer(targetPlayerId))
+            if (MultiplayerSession.IsAuthoritativePlayer(targetPlayerId)
+             && !ShouldWaitForHostBuiltInReviveStatus(targetPlayerId))
                 return false;
 
             Plugin.Log.LogInfo(
@@ -597,7 +634,9 @@ namespace CupheadOnline.Sync
                 return false;
 
             Vector2 revivePosition;
-            if (!TryGetHostRevivePosition(playerId, out revivePosition))
+            if (pkt.HasPosition)
+                revivePosition = new Vector2(pkt.PosX, pkt.PosY);
+            else if (!TryGetHostRevivePosition(playerId, out revivePosition))
                 revivePosition = player.center;
 
             if (ShouldDeferHostBuiltInRevive(playerId, pendingDeathEffect))
@@ -688,6 +727,14 @@ namespace CupheadOnline.Sync
 
             SuppressRemoteBuiltInBody(player);
             return true;
+        }
+
+        static bool ShouldWaitForHostBuiltInReviveStatus(PlayerId playerId)
+        {
+            return MultiplayerSession.IsClient
+                && Plugin.VanillaTwoPlayerOnline
+                && playerId <= PlayerId.PlayerTwo
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
         }
 
         public static bool ShouldSuppressRecentBuiltInReviveDeath(PlayerStatusPacket pkt, bool fromRemote)
@@ -821,10 +868,13 @@ namespace CupheadOnline.Sync
             if (PendingHostBuiltInReviveTicks.TryGetValue(playerId, out existingTick)
              && !NetTick.IsOlder(existingTick, tick))
             {
+                if (existingTick == tick)
+                    PendingHostBuiltInRevivePositions[playerId] = revivePosition;
                 return;
             }
 
             PendingHostBuiltInReviveTicks[playerId] = tick;
+            PendingHostBuiltInRevivePositions[playerId] = revivePosition;
             Plugin.Instance.StartCoroutine(ApplyDeferredHostBuiltInRevive(playerId, revivePosition, tick));
         }
 
@@ -852,6 +902,10 @@ namespace CupheadOnline.Sync
                 yield return null;
             }
 
+            float settleUntil = Time.unscaledTime + 0.2f;
+            while (Time.unscaledTime < settleUntil)
+                yield return null;
+
             uint latestTick;
             if (!PendingHostBuiltInReviveTicks.TryGetValue(playerId, out latestTick)
              || latestTick != tick)
@@ -860,6 +914,10 @@ namespace CupheadOnline.Sync
             }
 
             PendingHostBuiltInReviveTicks.Remove(playerId);
+            Vector2 latestPosition;
+            if (PendingHostBuiltInRevivePositions.TryGetValue(playerId, out latestPosition))
+                revivePosition = latestPosition;
+            PendingHostBuiltInRevivePositions.Remove(playerId);
 
             var player = GetPlayerSafe(playerId);
             if (player == null)
@@ -951,23 +1009,58 @@ namespace CupheadOnline.Sync
 
             RecentBuiltInRevives[localPlayerId] = Time.unscaledTime + 2.0f;
 
-            if (pushStatus)
+            bool deferBuiltInStatus = _deferHostBuiltInReviveStatus
+                && MultiplayerSession.IsHost
+                && localPlayerId <= PlayerId.PlayerTwo;
+
+            if (pushStatus && !deferBuiltInStatus)
+                ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static void QueueBuiltInFinalStatus(PlayerId playerId)
+        {
+            if (!MultiplayerSession.IsHost || Plugin.Instance == null)
+                return;
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            uint tick = MultiplayerSession.Tick;
+            PendingBuiltInFinalStatusTicks[playerId] = tick;
+            Plugin.Instance.StartCoroutine(PushBuiltInFinalStatusAfterSettle(playerId, tick));
+        }
+
+        static IEnumerator PushBuiltInFinalStatusAfterSettle(PlayerId playerId, uint tick)
+        {
+            float endAt = Time.unscaledTime + 0.45f;
+            while (Time.unscaledTime < endAt)
+                yield return null;
+
+            uint latestTick;
+            if (!PendingBuiltInFinalStatusTicks.TryGetValue(playerId, out latestTick)
+             || latestTick != tick)
+            {
+                yield break;
+            }
+
+            PendingBuiltInFinalStatusTicks.Remove(playerId);
+            var player = GetPlayerSafe(playerId);
+            if (player != null)
                 ParticipantStatusTracker.PushLocalStatus(player);
         }
 
         static bool TryGetHostRevivePosition(PlayerId playerId, out Vector2 position)
         {
-            PlayerStatePacket snapshot;
-            if (RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
-            {
-                position = new Vector2(snapshot.PosX, snapshot.PosY);
-                return true;
-            }
-
             var deathEffect = FindLocalDeathEffect(playerId);
             if (deathEffect != null)
             {
                 position = deathEffect.transform.position;
+                return true;
+            }
+
+            PlayerStatePacket snapshot;
+            if (RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+            {
+                position = new Vector2(snapshot.PosX, snapshot.PosY);
                 return true;
             }
 

@@ -17,6 +17,8 @@ namespace CupheadOnline.Patches
                 return;
             if (!MultiplayerSession.IsAuthoritativePlayer(player.id))
                 return;
+            if (ParticipantReviveController.ShouldSuppressHostBuiltInImmediateReviveStatus(player))
+                return;
 
             var levelPlayer = player as LevelPlayerController;
             if (levelPlayer == null || levelPlayer.motor == null)

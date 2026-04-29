@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CupheadOnline.Net;
 using UnityEngine;
@@ -88,9 +89,17 @@ namespace CupheadOnline.Sync
             _lastModeLogAt = -1f;
         }
 
-        public static void NotifyLevelStartReleased()
+        public static void NotifyLevelStartReleased(long releaseUtcTicks)
         {
-            _levelClockStartedAt = Time.unscaledTime;
+            float elapsedSinceSharedRelease = 0f;
+            if (releaseUtcTicks > 0L)
+            {
+                double elapsed = (DateTime.UtcNow.Ticks - releaseUtcTicks) / (double)TimeSpan.TicksPerSecond;
+                if (elapsed >= -0.25 && elapsed <= 0.75)
+                    elapsedSinceSharedRelease = Mathf.Max(0f, (float)elapsed);
+            }
+
+            _levelClockStartedAt = Time.unscaledTime - elapsedSinceSharedRelease;
             _localStates.Clear();
             ResetRemoteBuiltInInputs();
             LogModeIfNeeded(true);
