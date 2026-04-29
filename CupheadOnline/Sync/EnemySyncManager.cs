@@ -37,10 +37,13 @@ namespace CupheadOnline.Sync
         private static readonly HashSet<int> _suppressedClientEnemies = new HashSet<int>();
         private static uint _lastReceivedBossTick;
         private static float _lastHighLatencyVisualLogAt = -1f;
+        private static float _lastBossHealthAuthorityLogAt = -1f;
 
         private struct EnemySnapshotState
         {
             public float Hp;
+            public float BossHp;
+            public float BossTotalHp;
             public byte Phase;
             public Vector3 Position;
         }
@@ -128,6 +131,8 @@ namespace CupheadOnline.Sync
                 _lastSent[pkt.InstanceId] = new EnemySnapshotState
                 {
                     Hp = pkt.Hp,
+                    BossHp = pkt.BossHp,
+                    BossTotalHp = pkt.BossTotalHp,
                     Phase = pkt.Phase,
                     Position = go.transform.position,
                 };
@@ -280,9 +285,10 @@ namespace CupheadOnline.Sync
 
         static bool ShouldTrustDeterministicClientEnemySimulation()
         {
-            return Plugin.VanillaTwoPlayerOnline
-                && MultiplayerSession.IsClient
-                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
+            // Boss scripts are not deterministic enough across peers once relay latency,
+            // jitter, drops, and guest-owned damage are in play. Keep the host as the
+            // visual authority and use StateTime prediction to hide packet age.
+            return false;
         }
 
         static bool ShouldApplyHighLatencyBossHealthAuthority()
@@ -457,6 +463,7 @@ namespace CupheadOnline.Sync
             _suppressedClientEnemies.Clear();
             _lastReceivedBossTick = 0;
             _lastHighLatencyVisualLogAt = -1f;
+            _lastBossHealthAuthorityLogAt = -1f;
         }
 
         static void SuppressAllClientEnemySimulation()
@@ -598,6 +605,10 @@ namespace CupheadOnline.Sync
                 return true;
             if (Mathf.Abs(previous.Hp - pkt.Hp) >= 0.5f)
                 return true;
+            if (pkt.BossHp >= 0f
+             && (Mathf.Abs(previous.BossHp - pkt.BossHp) >= 0.5f
+                || Mathf.Abs(previous.BossTotalHp - pkt.BossTotalHp) >= 0.5f))
+                return true;
 
             var prevPos = previous.Position;
             float dx = prevPos.x - pkt.PosX;
@@ -644,9 +655,10 @@ namespace CupheadOnline.Sync
                 return;
 
             var type = properties.GetType();
-            var currentProperty = type.GetProperty("CurrentHealth", BindingFlags.Instance | BindingFlags.Public);
-            var totalField = type.GetField("TotalHealth", BindingFlags.Instance | BindingFlags.Public);
-            if (currentProperty == null || !currentProperty.CanWrite || totalField == null)
+            const BindingFlags propertyFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var currentProperty = type.GetProperty("CurrentHealth", propertyFlags);
+            var totalField = type.GetField("TotalHealth", propertyFlags);
+            if (currentProperty == null || !currentProperty.CanRead || totalField == null)
                 return;
 
             try
@@ -654,19 +666,28 @@ namespace CupheadOnline.Sync
                 float total = Mathf.Max(1f, pkt.BossTotalHp);
                 float hp = Mathf.Clamp(pkt.BossHp, 0f, total);
                 float current = (float)currentProperty.GetValue(properties, null);
+                var dealDamage = FindInstanceMethod(type, "DealDamage");
+                LogBossHealthAuthority("before", hp, total, current, currentProperty.CanWrite, dealDamage != null);
                 if (hp < current - 0.01f)
                 {
-                    var dealDamage = type.GetMethod("DealDamage", BindingFlags.Instance | BindingFlags.Public);
                     if (dealDamage != null)
                     {
-                        dealDamage.Invoke(properties, new object[] { current - hp });
+                        var parameters = dealDamage.GetParameters();
+                        object damageAmount = current - hp;
+                        if (parameters.Length == 1 && parameters[0].ParameterType != typeof(float))
+                            damageAmount = System.Convert.ChangeType(current - hp, parameters[0].ParameterType);
+                        dealDamage.Invoke(properties, new object[] { damageAmount });
                         current = (float)currentProperty.GetValue(properties, null);
                     }
                 }
 
                 totalField.SetValue(properties, total);
-                if (Mathf.Abs(current - hp) > 0.01f)
+                if (currentProperty.CanWrite && Mathf.Abs(current - hp) > 0.01f)
+                {
                     currentProperty.SetValue(properties, hp, null);
+                    current = (float)currentProperty.GetValue(properties, null);
+                }
+                LogBossHealthAuthority("after", hp, total, current, currentProperty.CanWrite, dealDamage != null);
             }
             catch
             {
@@ -683,8 +704,9 @@ namespace CupheadOnline.Sync
                 return false;
 
             var type = properties.GetType();
-            var currentProperty = type.GetProperty("CurrentHealth", BindingFlags.Instance | BindingFlags.Public);
-            var totalField = type.GetField("TotalHealth", BindingFlags.Instance | BindingFlags.Public);
+            const BindingFlags propertyFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var currentProperty = type.GetProperty("CurrentHealth", propertyFlags);
+            var totalField = type.GetField("TotalHealth", propertyFlags);
             if (currentProperty == null || totalField == null)
                 return false;
 
@@ -700,6 +722,48 @@ namespace CupheadOnline.Sync
                 total = -1f;
                 return false;
             }
+        }
+
+        static void LogBossHealthAuthority(string phase, float hostHp, float hostTotal, float localHp, bool canWrite, bool hasDealDamage)
+        {
+            if (!Plugin.AutoRunLanSteamE2E || !MultiplayerSession.IsClient)
+                return;
+
+            float now = Time.unscaledTime;
+            if (_lastBossHealthAuthorityLogAt > 0f && now - _lastBossHealthAuthorityLogAt < 5f)
+                return;
+
+            _lastBossHealthAuthorityLogAt = now;
+            Plugin.Log.LogInfo("[EnemySync] Boss health authority " + phase
+                + ": host="
+                + hostHp.ToString("0.##")
+                + "/"
+                + hostTotal.ToString("0.##")
+                + " local="
+                + localHp.ToString("0.##")
+                + " canWrite="
+                + canWrite
+                + " dealDamage="
+                + hasDealDamage
+                + ".");
+        }
+
+        static MethodInfo FindInstanceMethod(System.Type type, string name)
+        {
+            const BindingFlags flags = BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic
+                | BindingFlags.DeclaredOnly;
+
+            while (type != null)
+            {
+                var method = type.GetMethod(name, flags);
+                if (method != null)
+                    return method;
+                type = type.BaseType;
+            }
+
+            return null;
         }
 
         static object GetCurrentLevelProperties()

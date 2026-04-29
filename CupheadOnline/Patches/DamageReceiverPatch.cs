@@ -11,6 +11,11 @@ namespace CupheadOnline.Patches
         {
             return DamageReceiverAuthority.ShouldAllowLocalDamage(__instance);
         }
+
+        static void Postfix(DamageReceiver __instance, DamageDealer.DamageInfo info)
+        {
+            LanSteamE2ETest.NotifyEnemyDamage(__instance, info, false);
+        }
     }
 
     [HarmonyPatch(typeof(DamageReceiver), nameof(DamageReceiver.TakeDamageBruteForce))]
@@ -19,6 +24,11 @@ namespace CupheadOnline.Patches
         static bool Prefix(DamageReceiver __instance)
         {
             return DamageReceiverAuthority.ShouldAllowLocalDamage(__instance);
+        }
+
+        static void Postfix(DamageReceiver __instance, DamageDealer.DamageInfo info)
+        {
+            LanSteamE2ETest.NotifyEnemyDamage(__instance, info, true);
         }
     }
 

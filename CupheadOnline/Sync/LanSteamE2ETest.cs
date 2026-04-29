@@ -42,7 +42,10 @@ namespace CupheadOnline.Sync
         const float CardTimeout = 10f;
         const float LevelTimeout = 30f;
         const float FightDuration = 16f;
-        const float GuestOnlyDamageDuration = 4f;
+        const float GuestOnlyDamageDuration = 10f;
+        const float GuestOnlyShootingLaneX = -320f;
+        const float GuestOnlyShootingDeadZoneX = 90f;
+        const float GuestOnlyShootingAxis = 0.55f;
         const float DialogueTimeout = 10f;
         const float PauseTimeout = 8f;
         const float ReviveSmokeTimeout = 12f;
@@ -129,6 +132,7 @@ namespace CupheadOnline.Sync
         static bool _clientReverseReviveObservedSignalReceived;
         static bool _clientReverseReviveJumpPressed;
         static bool _clientReverseReviveParryPressed;
+        static bool _clientGuestOnlyLaneLogged;
         static bool _hostPausePressed;
         static bool _hostPauseObserved;
         static bool _hostUnpausePressed;
@@ -207,6 +211,8 @@ namespace CupheadOnline.Sync
         static string _fightStartBossName = string.Empty;
         static float _fightStartBossHealth;
         static float _fightStartBossTotal;
+        static int _fightEnemyDamageCount;
+        static bool _fightEnemyDamageLogged;
         static bool _hostSawP1Shooting;
         static bool _hostSawP2Shooting;
         static bool _clientSawP1Shooting;
@@ -233,6 +239,11 @@ namespace CupheadOnline.Sync
         static string _guestOnlyBossName = string.Empty;
         static float _guestOnlyStartBossHealth;
         static float _guestOnlyStartBossTotal;
+        static bool _guestOnlyStartEnemyHealthAvailable;
+        static string _guestOnlyStartEnemySummary = string.Empty;
+        static float _guestOnlyStartEnemyHealth;
+        static int _guestOnlyEnemyDamageCount;
+        static bool _guestOnlyEnemyDamageLogged;
         static Vector2 _hostAxis;
         static uint _hostButtons;
         static uint _hostDownButtons;
@@ -438,6 +449,7 @@ namespace CupheadOnline.Sync
                 case SessionSignalKind.LanSteamE2EFightDamageStarted:
                     if (MultiplayerSession.IsClient)
                     {
+                        ResetPauseSyncSmokeFlags();
                         _clientFightDamageStartSignalReceived = true;
                         _clientSynchronizedFightInputStartUtcTicks = pkt.UtcReleaseTicks;
                         _clientFightDamageStartedAt = 0f;
@@ -1017,6 +1029,7 @@ namespace CupheadOnline.Sync
                 out endBossTotal);
             Log("Fight smoke complete; P1=" + DescribeLevelPlayer(p1) + "; P2=" + DescribeLevelPlayer(p2)
                 + "; sawRemoteInput=" + _sawRemoteInput
+                + "; damageCallbacks=" + _fightEnemyDamageCount
                 + "; boss=" + BossHealthBarOverlay.GetDebugSummary() + ".");
             CaptureScreen("host_fight_end_" + SceneManager.GetActiveScene().name);
 
@@ -1071,7 +1084,8 @@ namespace CupheadOnline.Sync
             }
 
             if (_hasFightStartBossHealth && hasEndBossHealth && endBossName == _fightStartBossName
-             && endBossHealth >= _fightStartBossHealth - 0.5f)
+             && endBossHealth >= _fightStartBossHealth - 0.5f
+             && _fightEnemyDamageCount <= 0)
             {
                 Fail("Boss health did not decrease during the LAN fight smoke: start="
                     + _fightStartBossHealth.ToString("0.##")
@@ -1081,6 +1095,8 @@ namespace CupheadOnline.Sync
                     + endBossHealth.ToString("0.##")
                     + "/"
                     + endBossTotal.ToString("0.##")
+                    + "; damageCallbacks="
+                    + _fightEnemyDamageCount
                     + ".");
                 return;
             }
@@ -1573,14 +1589,14 @@ namespace CupheadOnline.Sync
             }
 
             bool fightWindowComplete = _remoteCheckpointReceived
-                || (_clientFightReleasedAt > 0f && Time.unscaledTime - _clientFightReleasedAt >= FightDuration);
+                || (_clientFightDamageStartedAt > 0f && Time.unscaledTime - _clientFightDamageStartedAt >= FightDuration);
             if (!fightWindowComplete)
                 return;
 
             if (!_clientPauseObserved)
             {
-                if (_clientFightReleasedAt > 0f
-                 && Time.unscaledTime - _clientFightReleasedAt > FightDuration + PauseTimeout + 4f)
+                if (_clientFightDamageStartedAt > 0f
+                 && Time.unscaledTime - _clientFightDamageStartedAt > FightDuration + PauseTimeout + 4f)
                     Fail("Client did not observe the synced host pause menu.");
                 return;
             }
@@ -1722,6 +1738,9 @@ namespace CupheadOnline.Sync
                 return;
 
             float delay = EstimateScriptedStartDelaySeconds();
+            ResetPauseSyncSmokeFlags();
+            _fightEnemyDamageCount = 0;
+            _fightEnemyDamageLogged = false;
             _hostSynchronizedFightInputStartAt = Time.unscaledTime + delay;
             _hostFightDamageStartSignalSent = true;
             SendDialogueObservedSignal(
@@ -1746,6 +1765,23 @@ namespace CupheadOnline.Sync
                 return true;
 
             return Time.unscaledTime >= _hostSynchronizedFightInputStartAt;
+        }
+
+        static void ResetPauseSyncSmokeFlags()
+        {
+            _clientPauseObserved = false;
+            _clientPauseSignalReceived = false;
+            _clientUnpauseObserved = false;
+            _clientUnpauseSignalReceived = false;
+            _clientPauseResumeCompleteLogged = false;
+            _hostPausePressed = false;
+            _hostPauseObserved = false;
+            _hostUnpausePressed = false;
+            _hostUnpauseObserved = false;
+            _clientPauseObservedAt = 0f;
+            _hostPauseObservedAt = 0f;
+            _clientUnpauseObservedAt = 0f;
+            _hostUnpauseObservedAt = 0f;
         }
 
         static bool IsClientSynchronizedFightInputLive()
@@ -2120,6 +2156,30 @@ namespace CupheadOnline.Sync
             return score;
         }
 
+        static bool TryGetPrimaryEnemyPosition(out Vector2 position)
+        {
+            position = Vector2.zero;
+            var enemies = UnityEngine.Object.FindObjectsOfType<DamageReceiver>();
+            DamageReceiver best = null;
+            for (int i = 0; i < enemies.Length; i++)
+            {
+                var enemy = enemies[i];
+                if (enemy == null || enemy.gameObject == null || enemy.type != DamageReceiver.Type.Enemy)
+                    continue;
+                if (!enemy.gameObject.activeInHierarchy)
+                    continue;
+
+                if (best == null || ScoreEnemyForVisualSample(enemy) < ScoreEnemyForVisualSample(best))
+                    best = enemy;
+            }
+
+            if (best == null || best.gameObject == null)
+                return false;
+
+            position = best.gameObject.transform.position;
+            return true;
+        }
+
         static bool RunGuestOnlyShootingSmoke()
         {
             if (_guestOnlyDamageVerified)
@@ -2162,12 +2222,17 @@ namespace CupheadOnline.Sync
                 _guestOnlyBossName = bossName;
                 _guestOnlyStartBossHealth = bossHealth;
                 _guestOnlyStartBossTotal = bossTotal;
+                _guestOnlyStartEnemyHealthAvailable = TryGetActiveEnemyHealth(
+                    out _guestOnlyStartEnemySummary,
+                    out _guestOnlyStartEnemyHealth);
                 Log("Guest-only shooting smoke started: boss="
                     + bossName
                     + " "
                     + bossHealth.ToString("0.##")
                     + "/"
                     + bossTotal.ToString("0.##")
+                    + "; activeEnemy="
+                    + (_guestOnlyStartEnemyHealthAvailable ? _guestOnlyStartEnemySummary : "unavailable")
                     + ".");
                 return false;
             }
@@ -2187,8 +2252,17 @@ namespace CupheadOnline.Sync
                 return false;
             }
 
-            if (bossName == _guestOnlyBossName
-             && bossHealth >= _guestOnlyStartBossHealth - 0.5f)
+            string enemySummary;
+            float enemyHealth;
+            bool hasEnemyHealth = TryGetActiveEnemyHealth(out enemySummary, out enemyHealth);
+            bool bossDamageSeen = bossName != _guestOnlyBossName
+                || bossHealth < _guestOnlyStartBossHealth - 0.5f;
+            bool enemyDamageSeen = _guestOnlyStartEnemyHealthAvailable
+                && hasEnemyHealth
+                && enemyHealth < _guestOnlyStartEnemyHealth - 0.5f;
+            bool enemyDamageCallbackSeen = _guestOnlyEnemyDamageCount > 0;
+
+            if (!bossDamageSeen && !enemyDamageSeen && !enemyDamageCallbackSeen)
             {
                 Fail("Guest Player Two shooting did not damage the boss: start="
                     + _guestOnlyStartBossHealth.ToString("0.##")
@@ -2198,6 +2272,12 @@ namespace CupheadOnline.Sync
                     + bossHealth.ToString("0.##")
                     + "/"
                     + bossTotal.ToString("0.##")
+                    + "; activeEnemyStart="
+                    + (_guestOnlyStartEnemyHealthAvailable ? _guestOnlyStartEnemySummary : "unavailable")
+                    + "; activeEnemyEnd="
+                    + (hasEnemyHealth ? enemySummary : "unavailable")
+                    + "; damageCallbacks="
+                    + _guestOnlyEnemyDamageCount
                     + ".");
                 return false;
             }
@@ -2210,8 +2290,142 @@ namespace CupheadOnline.Sync
                 + bossHealth.ToString("0.##")
                 + "/"
                 + bossTotal.ToString("0.##")
+                + "; activeEnemy="
+                + (hasEnemyHealth ? enemySummary : "unavailable")
+                + "; damageCallbacks="
+                + _guestOnlyEnemyDamageCount
                 + ".");
             return true;
+        }
+
+        public static void NotifyEnemyDamage(DamageReceiver receiver, DamageDealer.DamageInfo info, bool bruteForce)
+        {
+            if (!Plugin.AutoRunLanSteamE2E || !MultiplayerSession.IsHost)
+                return;
+            if (receiver == null || receiver.type != DamageReceiver.Type.Enemy)
+                return;
+
+            if (!_guestOnlyDamageStarted || _guestOnlyDamageVerified)
+            {
+                NotifyFightEnemyDamage(receiver, info, bruteForce);
+                return;
+            }
+
+            _guestOnlyEnemyDamageCount++;
+            if (_guestOnlyEnemyDamageLogged)
+            {
+                NotifyFightEnemyDamage(receiver, info, bruteForce);
+                return;
+            }
+
+            _guestOnlyEnemyDamageLogged = true;
+            string name = receiver.gameObject != null ? receiver.gameObject.name : "enemy";
+            Log("Host observed enemy damage during guest-only shooting smoke: target="
+                + name
+                + " damage="
+                + info.damage.ToString("0.##")
+                + " source="
+                + info.damageSource
+                + " bruteForce="
+                + bruteForce
+                + ".");
+            NotifyFightEnemyDamage(receiver, info, bruteForce);
+        }
+
+        static void NotifyFightEnemyDamage(DamageReceiver receiver, DamageDealer.DamageInfo info, bool bruteForce)
+        {
+            if (!_hostFightDamageStartSignalSent || !IsHostSynchronizedFightInputLive())
+                return;
+
+            _fightEnemyDamageCount++;
+            if (_fightEnemyDamageLogged)
+                return;
+
+            _fightEnemyDamageLogged = true;
+            string name = receiver.gameObject != null ? receiver.gameObject.name : "enemy";
+            Log("Host observed enemy damage during two-player fight smoke: target="
+                + name
+                + " damage="
+                + info.damage.ToString("0.##")
+                + " source="
+                + info.damageSource
+                + " bruteForce="
+                + bruteForce
+                + ".");
+        }
+
+        static bool TryGetActiveEnemyHealth(out string summary, out float current)
+        {
+            summary = "none";
+            current = 0f;
+
+            var receivers = UnityEngine.Object.FindObjectsOfType<DamageReceiver>();
+            int count = 0;
+            string primaryName = string.Empty;
+            float primaryHp = -1f;
+
+            for (int i = 0; i < receivers.Length; i++)
+            {
+                var receiver = receivers[i];
+                if (receiver == null
+                 || receiver.type != DamageReceiver.Type.Enemy
+                 || receiver.gameObject == null
+                 || !receiver.gameObject.activeInHierarchy)
+                    continue;
+
+                float hp;
+                if (!TryReadDamageReceiverHp(receiver, out hp) || hp <= 0.01f)
+                    continue;
+
+                count++;
+                current += hp;
+                if (hp > primaryHp)
+                {
+                    primaryHp = hp;
+                    primaryName = receiver.gameObject.name ?? "enemy";
+                }
+            }
+
+            if (count == 0)
+                return false;
+
+            summary = "count="
+                + count
+                + " totalHp="
+                + current.ToString("0.##")
+                + " primary="
+                + primaryName
+                + ":"
+                + primaryHp.ToString("0.##");
+            return true;
+        }
+
+        static bool TryReadDamageReceiverHp(DamageReceiver receiver, out float hp)
+        {
+            hp = -1f;
+            if (receiver == null)
+                return false;
+
+            var type = receiver.GetType();
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            foreach (var name in new[] { "hp", "HP", "health", "_hp", "currentHp", "currentHealth" })
+            {
+                var field = type.GetField(name, flags);
+                if (field == null || field.FieldType != typeof(float))
+                    continue;
+
+                try
+                {
+                    hp = (float)field.GetValue(receiver);
+                    return hp >= 0f;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return false;
         }
 
         static bool IsPlayerShooting(LevelPlayerController player)
@@ -2471,7 +2685,7 @@ namespace CupheadOnline.Sync
             string sceneName = SceneManager.GetActiveScene().name;
             if (sceneName.StartsWith("scene_level_", StringComparison.Ordinal))
             {
-                _clientAxis = Vector2.zero;
+                _clientAxis = GetClientLevelAxis();
                 _clientButtons = !IsClientInGameOverRetrySmoke()
                     && ShouldClientHoldLevelShoot()
                     && IsBattleIntroComplete()
@@ -2500,6 +2714,64 @@ namespace CupheadOnline.Sync
             if (_clientFightDamageStartSignalReceived)
                 return IsClientSynchronizedFightInputLive();
             return _clientReverseReviveMirrorVerified && !IsClientInGameOverRetrySmoke();
+        }
+
+        static Vector2 GetClientLevelAxis()
+        {
+            Vector2 axis;
+            if (TryGetClientGuestOnlyShootingAxis(out axis))
+                return axis;
+
+            return Vector2.zero;
+        }
+
+        static bool TryGetClientGuestOnlyShootingAxis(out Vector2 axis)
+        {
+            axis = Vector2.zero;
+            if (Plugin.AutoRunLanSteamE2EVisualOnly
+             || IsClientInGameOverRetrySmoke()
+             || !_clientReverseReviveMirrorVerified
+             || _clientFightDamageStartSignalReceived)
+                return false;
+
+            var p2 = PlayerManager.GetPlayer(PlayerId.PlayerTwo) as LevelPlayerController;
+            if (p2 == null || p2.IsDead || !p2.gameObject.activeInHierarchy)
+                return false;
+
+            Vector2 enemy;
+            if (TryGetPrimaryEnemyPosition(out enemy))
+            {
+                float dx = enemy.x - p2.transform.position.x;
+                bool shouldSteer = Mathf.Abs(dx) > GuestOnlyShootingDeadZoneX;
+                if (shouldSteer && !_clientGuestOnlyLaneLogged)
+                {
+                    _clientGuestOnlyLaneLogged = true;
+                    Log("Client steering Player Two toward guest-only shooting target: playerX="
+                        + p2.transform.position.x.ToString("0.0")
+                        + " enemyX="
+                        + enemy.x.ToString("0.0")
+                        + ".");
+                }
+
+                if (shouldSteer)
+                    axis = new Vector2(dx > 0f ? GuestOnlyShootingAxis : -GuestOnlyShootingAxis, 0f);
+                return shouldSteer;
+            }
+
+            bool shouldAdvance = p2.transform.position.x < GuestOnlyShootingLaneX;
+            if (shouldAdvance && !_clientGuestOnlyLaneLogged)
+            {
+                _clientGuestOnlyLaneLogged = true;
+                Log("Client moving Player Two into fallback guest-only shooting lane from x="
+                    + p2.transform.position.x.ToString("0.0")
+                    + " toward x="
+                    + GuestOnlyShootingLaneX.ToString("0.0")
+                    + ".");
+            }
+
+            if (shouldAdvance)
+                axis = new Vector2(GuestOnlyShootingAxis, 0f);
+            return shouldAdvance;
         }
 
         static void DriveClientMapDialogueInput()
@@ -3495,6 +3767,7 @@ namespace CupheadOnline.Sync
                 _clientReverseReviveObservedSignalReceived = false;
                 _clientReverseReviveJumpPressed = false;
                 _clientReverseReviveParryPressed = false;
+                _clientGuestOnlyLaneLogged = false;
                 _hostPausePressed = false;
                 _hostPauseObserved = false;
                 _hostUnpausePressed = false;
@@ -3573,6 +3846,8 @@ namespace CupheadOnline.Sync
                 _fightStartBossName = string.Empty;
                 _fightStartBossHealth = 0f;
                 _fightStartBossTotal = 0f;
+                _fightEnemyDamageCount = 0;
+                _fightEnemyDamageLogged = false;
                 _hostSawP1Shooting = false;
                 _hostSawP2Shooting = false;
                 _clientSawP1Shooting = false;
@@ -3599,6 +3874,11 @@ namespace CupheadOnline.Sync
                 _guestOnlyBossName = string.Empty;
                 _guestOnlyStartBossHealth = 0f;
                 _guestOnlyStartBossTotal = 0f;
+                _guestOnlyStartEnemyHealthAvailable = false;
+                _guestOnlyStartEnemySummary = string.Empty;
+                _guestOnlyStartEnemyHealth = 0f;
+                _guestOnlyEnemyDamageCount = 0;
+                _guestOnlyEnemyDamageLogged = false;
             }
             ResetScriptedInput();
             Log(message);
