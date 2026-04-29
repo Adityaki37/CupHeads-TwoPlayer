@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.46 - 2026-04-29
+
+- Restored deterministic high-latency client boss visuals so delayed host enemy transform snapshots no longer make Slime snap or teleport on the guest.
+- Kept host-authoritative boss health correction in place, so guest-owned damage still converges without forcing late transform packets onto the client.
+- Made the visual-combat verifier target-aware: Slime still enforces the 95% blue-body frame-sync gate, while Root Pack no longer fails on transient blue projectile pixels that are not a stable boss-body signal.
+
 ## v1.2.45 - 2026-04-28
 
 - Delayed the host's local level-start release by the estimated one-way network latency after sending the release packet, so host and guest leave the "Ready?" gate together instead of the host starting immediately while the release packet is still in flight.
