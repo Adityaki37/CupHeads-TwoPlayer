@@ -285,10 +285,12 @@ namespace CupheadOnline.Sync
 
         static bool ShouldTrustDeterministicClientEnemySimulation()
         {
-            // Boss scripts are not deterministic enough across peers once relay latency,
-            // jitter, drops, and guest-owned damage are in play. Keep the host as the
-            // visual authority and use StateTime prediction to hide packet age.
-            return false;
+            // At high latency, delayed host transform snapshots make bosses snap or
+            // teleport on clients. Let the local boss scripts keep visual motion
+            // deterministic, while boss health is still corrected by host authority.
+            return Plugin.VanillaTwoPlayerOnline
+                && MultiplayerSession.IsClient
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
         }
 
         static bool ShouldApplyHighLatencyBossHealthAuthority()

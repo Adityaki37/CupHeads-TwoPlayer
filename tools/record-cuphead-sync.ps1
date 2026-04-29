@@ -834,7 +834,8 @@ $bossMismatchFrames = @($bossFrames | Where-Object { $_.BossRedDeltaPct -gt 1.0 
 $blueFrames = @($metrics | Where-Object { $_.BlueBoxesVisible -and $_.BossBarVisible })
 $blueMismatchFrames = @($blueFrames | Where-Object { $_.BlueCenterDeltaPixels -gt 120.0 -or $_.BlueAreaDeltaPct -gt 65.0 })
 $blueSyncPassRatio = if ($blueFrames.Count -gt 0) { [Math]::Round(1.0 - ($blueMismatchFrames.Count / [double]$blueFrames.Count), 4) } else { 1.0 }
-if ($VisualCombatOnly -and $blueFrames.Count -ge 20 -and $blueSyncPassRatio -lt 0.95) {
+$blueObjectGateApplies = $VisualCombatOnly -and ($TargetBossLevel -match '^(?i:Slime)$')
+if ($blueObjectGateApplies -and $blueFrames.Count -ge 20 -and $blueSyncPassRatio -lt 0.95) {
     $failed = $true
     $visualSyncFailure = " Visual frame sync below 95%: blue-object pass ratio " + $blueSyncPassRatio + " (" + ($blueFrames.Count - $blueMismatchFrames.Count) + "/" + $blueFrames.Count + ")."
     $syncHealthFailure = ($syncHealthFailure + $visualSyncFailure).Trim()
@@ -877,7 +878,8 @@ $report = [pscustomobject]@{
     BlueObjectVisibleFrameCount = $blueFrames.Count
     BlueObjectMismatchFrameCount = $blueMismatchFrames.Count
     BlueObjectSyncPassRatio = $blueSyncPassRatio
-    BlueObjectSyncEnforced = [bool]$VisualCombatOnly
+    BlueObjectSyncEnforced = [bool]$blueObjectGateApplies
+    BlueObjectSyncGate = if ($blueObjectGateApplies) { "Slime boss body" } else { "not enforced for target '" + $TargetBossLevel + "'; blue pixels are not a stable boss-body signal" }
     ExactFullFrameMatchCount = $exactMatchFrames.Count
     ExactFullFrameMismatchCount = $fullMismatchFrames.Count
     ExactFullFrameMatch = $fullMismatchFrames.Count -eq 0
