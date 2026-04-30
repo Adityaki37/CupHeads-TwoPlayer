@@ -21,6 +21,7 @@ namespace CupheadOnline.Sync
             public uint LastReceivedTick;
             public bool HasPromotedTick;
             public uint LastPromotedTick;
+            public uint LastRawButtonsForLog;
             public int StallFrames;
             public uint DownEdges;
             public uint UpEdges;
@@ -40,6 +41,8 @@ namespace CupheadOnline.Sync
 
         static readonly Dictionary<byte, RemoteInputState> _states =
             new Dictionary<byte, RemoteInputState>(2);
+        static readonly Dictionary<byte, float> _dropInputBeforePacketTime =
+            new Dictionary<byte, float>(2);
 
         static RemoteInputDriver()
         {
@@ -53,6 +56,14 @@ namespace CupheadOnline.Sync
 
         public static void Apply(byte participantId, InputFramePacket pkt)
         {
+            float dropBefore;
+            if (pkt.InputTime >= 0f
+             && _dropInputBeforePacketTime.TryGetValue(participantId, out dropBefore)
+             && pkt.InputTime + 0.0001f < dropBefore)
+            {
+                return;
+            }
+
             if (HighLatencyInputSync.ShouldDropUntimedNetworkGameplayInput(participantId, pkt))
                 return;
 
@@ -202,16 +213,35 @@ namespace CupheadOnline.Sync
         public static void Reset()
         {
             _states.Clear();
+            _dropInputBeforePacketTime.Clear();
         }
 
         public static void Reset(PlayerId playerId)
         {
             _states.Remove((byte)playerId);
+            _dropInputBeforePacketTime.Remove((byte)playerId);
         }
 
         public static void Reset(byte participantId)
         {
             _states.Remove(participantId);
+            _dropInputBeforePacketTime.Remove(participantId);
+        }
+
+        public static void ResetDroppingOlderPackets(PlayerId playerId)
+        {
+            ResetDroppingOlderPackets((byte)playerId);
+        }
+
+        public static void ResetDroppingOlderPackets(byte participantId)
+        {
+            _states.Remove(participantId);
+
+            float now = HighLatencyInputSync.PacketTimeNow();
+            if (now >= 0f)
+                _dropInputBeforePacketTime[participantId] = now;
+            else
+                _dropInputBeforePacketTime.Remove(participantId);
         }
 
         static RemoteInputState GetOrCreateState(PlayerId playerId)
@@ -261,10 +291,13 @@ namespace CupheadOnline.Sync
             }
             state.StallFrames = 0;
 
+            float dueAt = HighLatencyInputSync.GetDueTime(pkt);
+            LogJumpDelayIfNeeded("remote", state, pkt, dueAt);
+
             InsertDelayedSorted(state, new DelayedInputFrame
             {
                 Packet = pkt,
-                DueAt = HighLatencyInputSync.GetDueTime(pkt),
+                DueAt = dueAt,
             });
 
             while (state.Delayed.Count > MaxDelayedFrames)
@@ -382,6 +415,26 @@ namespace CupheadOnline.Sync
             state.Delayed.Insert(index, frame);
         }
 
+        static void LogJumpDelayIfNeeded(string side, RemoteInputState state, InputFramePacket pkt, float dueAt)
+        {
+            if (!Plugin.AutoRunLanSteamE2E || state == null)
+                return;
+
+            uint jumpMask = 1u << (int)CupheadButton.Jump;
+            bool jumpDown = (pkt.Buttons & jumpMask) != 0u && (state.LastRawButtonsForLog & jumpMask) == 0u;
+            state.LastRawButtonsForLog = pkt.Buttons;
+            if (!jumpDown)
+                return;
+
+            Plugin.Log.LogInfo("[SyncClock] " + side
+                + " jump down inputTime=" + pkt.InputTime.ToString("0.000")
+                + " due=" + dueAt.ToString("0.000")
+                + " now=" + HighLatencyInputSync.PlayoutTimeNow().ToString("0.000")
+                + " delay=" + HighLatencyInputSync.GetDelaySeconds().ToString("0.000")
+                + " tick=" + pkt.Tick
+                + ".");
+        }
+
         static bool ConsumeEdgeForFrame(uint edges, int[] servedFrames, CupheadButton button)
         {
             int buttonIndex = (int)button;
@@ -391,6 +444,9 @@ namespace CupheadOnline.Sync
             uint mask = 1u << buttonIndex;
             if ((edges & mask) == 0u)
                 return false;
+
+            if (!Time.inFixedTimeStep)
+                return true;
 
             int frame = Time.frameCount;
             if (servedFrames[buttonIndex] == frame)

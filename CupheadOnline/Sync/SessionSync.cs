@@ -527,7 +527,7 @@ namespace CupheadOnline.Sync
             if (Plugin.Net == null || !Plugin.Net.IsConnected || !MultiplayerSession.IsHost)
                 return;
 
-            bool paused = PauseManager.state == PauseManager.State.Paused;
+            bool paused = IsLevelPauseMenuOpenForSync();
             if (_hasLastBroadcastPauseState && _lastBroadcastPauseState == paused)
                 return;
 
@@ -549,6 +549,9 @@ namespace CupheadOnline.Sync
             if (!string.IsNullOrEmpty(snapshot.SceneName)
              && !string.IsNullOrEmpty(localScene)
              && !string.Equals(snapshot.SceneName, localScene, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            if (IsStalePauseSnapshotForCurrentBattle(snapshot))
                 return;
 
             bool localPaused = PauseManager.state == PauseManager.State.Paused;
@@ -1455,8 +1458,50 @@ namespace CupheadOnline.Sync
             byte flags = 0;
             if (_hasTrackedSave) flags |= 1;
             if (Level.Current != null) flags |= 2;
-            if (PauseManager.state == PauseManager.State.Paused) flags |= 4;
+            if (IsLevelPauseMenuOpenForSync()) flags |= 4;
             return flags;
+        }
+
+        private static bool IsLevelPauseMenuOpenForSync()
+        {
+            try
+            {
+                var gui = UnityEngine.Object.FindObjectOfType<LevelPauseGUI>();
+                return gui != null
+                    && PauseManager.state == PauseManager.State.Paused
+                    && (gui.state == AbstractPauseGUI.State.Paused
+                     || gui.state == AbstractPauseGUI.State.Animating);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsStalePauseSnapshotForCurrentBattle(SessionSnapshotPacket snapshot)
+        {
+            if (!IsBattleActive())
+                return false;
+            if (snapshot.CurrentLevel != GetCurrentBattleLevel())
+                return false;
+
+            float localElapsed = Mathf.Max(0f, BattleAssistHud.ElapsedSeconds);
+            if (localElapsed <= 1.5f)
+                return false;
+
+            float snapshotElapsed = Mathf.Max(0f, snapshot.BattleElapsedSeconds);
+            if (snapshotElapsed > 0.5f)
+                return false;
+            if (localElapsed - snapshotElapsed <= 2.0f)
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[Session] Ignored stale host pause snapshot: local battle clock "
+                + localElapsed.ToString("0.000")
+                + "s, snapshot clock "
+                + snapshotElapsed.ToString("0.000")
+                + "s.");
+            return true;
         }
 
         private static bool ShouldUseFastBattleSnapshotCadence()

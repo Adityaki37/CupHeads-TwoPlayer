@@ -55,6 +55,12 @@ namespace CupheadOnline.Sync
                 return;
             bool acceptHostBuiltInRevive = hasExisting && ShouldAcceptRemoteHostBuiltInRevive(existing, pkt, fromRemote);
             if (!acceptHostBuiltInRevive
+             && ParticipantReviveController.ShouldAcceptRecentHostBuiltInRevivePosition(pkt, fromRemote))
+            {
+                acceptHostBuiltInRevive = true;
+            }
+
+            if (!acceptHostBuiltInRevive
              && ShouldIgnoreRemoteAliveStatusWhileLocallyDead(existing, pkt, fromRemote, hasExisting))
             {
                 return;

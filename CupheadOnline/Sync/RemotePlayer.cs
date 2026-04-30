@@ -161,6 +161,19 @@ namespace CupheadOnline.Sync
         public static bool TryGetLatestSnapshot(byte participantId, bool mapState, out PlayerStatePacket snapshot)
         {
             var state = GetOrCreateState(participantId);
+            if (state.Buffer.Count > 0)
+            {
+                var queued = state.Buffer.ToArray();
+                for (int i = queued.Length - 1; i >= 0; i--)
+                {
+                    if (queued[i].IsMapState == mapState)
+                    {
+                        snapshot = queued[i];
+                        return true;
+                    }
+                }
+            }
+
             if (state.HasLast && state.Last.IsMapState == mapState)
             {
                 snapshot = state.Last;

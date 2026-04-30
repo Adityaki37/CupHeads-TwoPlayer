@@ -24,6 +24,7 @@ namespace CupheadOnline.Sync
             public InputFramePacket Current;
             public InputFramePacket Previous;
             public bool HasCurrent;
+            public uint LastRawButtonsForLog;
             public uint DownEdges;
             public uint UpEdges;
             public readonly int[] DownServedFrames = CreateServedFrameBuffer();
@@ -89,6 +90,11 @@ namespace CupheadOnline.Sync
             _lastModeLogAt = -1f;
         }
 
+        public static void ResetLocalPlayerInput(PlayerId playerId)
+        {
+            _localStates.Remove((byte)playerId);
+        }
+
         public static void NotifyLevelStartReleased(long releaseUtcTicks)
         {
             float elapsedSinceSharedRelease = 0f;
@@ -137,13 +143,13 @@ namespace CupheadOnline.Sync
 
         public static float EstimateOneWaySeconds()
         {
+            if (Plugin.LanArtificialLatencyMs > 0)
+                return Mathf.Clamp(Plugin.LanArtificialLatencyMs / 1000f, 0f, 2.5f);
+
             float delay = 0f;
 
             if (Plugin.Net != null && Plugin.Net.Latency > 0)
                 delay = Mathf.Max(delay, Plugin.Net.Latency * 0.0005f);
-
-            if (Plugin.LanArtificialLatencyMs > 0)
-                delay = Mathf.Max(delay, Plugin.LanArtificialLatencyMs / 1000f);
 
             return Mathf.Clamp(delay, 0f, 2.5f);
         }
@@ -165,11 +171,17 @@ namespace CupheadOnline.Sync
             if (pkt.InputTime < 0f)
                 pkt.InputTime = PacketTimeNow();
 
+            if (HasGameplayInput(pkt))
+                ParticipantReviveController.CancelRecentBuiltInReviveCorrection(playerId);
+
             var state = GetOrCreateLocalState(playerId);
+            float dueAt = GetDueTime(pkt);
+            LogJumpDelayIfNeeded("local", (byte)playerId, pkt, dueAt, state.LastRawButtonsForLog);
+            state.LastRawButtonsForLog = pkt.Buttons;
             state.Queue.Enqueue(new DelayedFrame
             {
                 Packet = pkt,
-                DueAt = GetDueTime(pkt),
+                DueAt = dueAt,
             });
 
             while (state.Queue.Count > MaxQueuedFrames)
@@ -217,6 +229,19 @@ namespace CupheadOnline.Sync
             return true;
         }
 
+        public static bool PeekPressedThisFrame(PlayerId playerId, CupheadButton button)
+        {
+            int actionId = (int)button;
+            if (actionId < 0 || actionId >= 32)
+                return false;
+            if (!ShouldDelayLocalPlayer(playerId))
+                return false;
+
+            var state = GetOrCreateLocalState(playerId);
+            AdvanceLocal(state);
+            return (state.DownEdges & (1u << actionId)) != 0u;
+        }
+
         static bool ShouldDelayLocalPlayer(PlayerId playerId)
         {
             return IsEnabled
@@ -239,6 +264,21 @@ namespace CupheadOnline.Sync
                 default:
                     return false;
             }
+        }
+
+        static bool HasGameplayInput(InputFramePacket pkt)
+        {
+            if (Mathf.Abs(pkt.AxisX) > 0.15f || Mathf.Abs(pkt.AxisY) > 0.15f)
+                return true;
+
+            uint gameplayButtons = 0u;
+            gameplayButtons |= 1u << (int)CupheadButton.Jump;
+            gameplayButtons |= 1u << (int)CupheadButton.Shoot;
+            gameplayButtons |= 1u << (int)CupheadButton.Super;
+            gameplayButtons |= 1u << (int)CupheadButton.SwitchWeapon;
+            gameplayButtons |= 1u << (int)CupheadButton.Lock;
+            gameplayButtons |= 1u << (int)CupheadButton.Dash;
+            return (pkt.Buttons & gameplayButtons) != 0u;
         }
 
         static LocalInputState GetOrCreateLocalState(PlayerId playerId)
@@ -317,6 +357,9 @@ namespace CupheadOnline.Sync
             if ((edges & mask) == 0u)
                 return false;
 
+            if (!Time.inFixedTimeStep)
+                return true;
+
             int frame = Time.frameCount;
             if (servedFrames[buttonIndex] == frame)
                 return true;
@@ -332,6 +375,24 @@ namespace CupheadOnline.Sync
             var frames = new int[32];
             ResetServedFrames(frames);
             return frames;
+        }
+
+        static void LogJumpDelayIfNeeded(string side, byte participantId, InputFramePacket pkt, float dueAt, uint previousButtons)
+        {
+            if (!Plugin.AutoRunLanSteamE2E)
+                return;
+
+            uint jumpMask = 1u << (int)CupheadButton.Jump;
+            if ((pkt.Buttons & jumpMask) == 0u || (previousButtons & jumpMask) != 0u)
+                return;
+
+            Plugin.Log.LogInfo("[SyncClock] " + side
+                + " jump down p" + participantId
+                + " inputTime=" + pkt.InputTime.ToString("0.000")
+                + " due=" + dueAt.ToString("0.000")
+                + " now=" + PlayoutTimeNow().ToString("0.000")
+                + " delay=" + GetDelaySeconds().ToString("0.000")
+                + ".");
         }
 
         static void ResetServedFrames(int[] frames)

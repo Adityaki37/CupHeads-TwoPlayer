@@ -32,6 +32,7 @@ namespace CupheadOnline.Patches
 
         static readonly Dictionary<byte, MotionSample> LastBuiltMotion =
             new Dictionary<byte, MotionSample>(2);
+        const float BuiltInReviveSettledY = -225f;
 
         static PlayerMotorPatch()
         {
@@ -96,6 +97,14 @@ namespace CupheadOnline.Patches
 
             bool authoritativeBuiltIn = MultiplayerSession.IsHost && player.id <= PlayerId.PlayerTwo;
             bool localPlayer = MultiplayerSession.IsLocalPlayer(player.id);
+            bool clientSimulatedBuiltIn = MultiplayerSession.IsClient
+                && localPlayer
+                && player.id <= PlayerId.PlayerTwo
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
+
+            if (clientSimulatedBuiltIn)
+                ApplyClientBuiltInReviveCorrection(__instance, player.id);
+
             if (!authoritativeBuiltIn && !localPlayer)
                 return;
 
@@ -244,17 +253,41 @@ namespace CupheadOnline.Patches
                 return;
 
             PlayerStatePacket snapshot;
-            if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+            if (!TryGetHostAuthoritativeSnapshot(playerId, out snapshot))
                 return;
             if (snapshot.IsMapState)
                 return;
 
-            var target = GetPresentationPosition(snapshot, motor.transform.position.z);
+            if (snapshot.IsDead)
+                return;
+
+            bool highLatencyBuiltIn = Plugin.VanillaTwoPlayerOnline
+                && MultiplayerSession.IsClient
+                && playerId <= PlayerId.PlayerTwo
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
+            var target = highLatencyBuiltIn
+                ? GetPresentationPosition(snapshot, motor.transform.position.z)
+                : GetRawPosition(snapshot, motor.transform.position.z);
             float distance = Vector2.Distance(motor.transform.position, target);
             bool tightBuiltInSync = Plugin.VanillaTwoPlayerOnline && playerId <= PlayerId.PlayerTwo;
             float deadZone = tightBuiltInSync ? 0.08f : Plugin.LatencyFriendlyDamage ? 0.85f : 0.35f;
             float snapDistance = tightBuiltInSync ? 1.25f : Plugin.LatencyFriendlyDamage ? 8f : 4f;
             float blend = tightBuiltInSync ? 0.65f : Plugin.LatencyFriendlyDamage ? 0.08f : 0.18f;
+
+            if (highLatencyBuiltIn)
+            {
+                if (distance < 0.35f)
+                {
+                    ApplySnapshotMotorState(motor, snapshot);
+                    return;
+                }
+
+                motor.transform.position = distance > 8f
+                    ? target
+                    : Vector3.Lerp(motor.transform.position, target, 0.85f);
+                ApplySnapshotMotorState(motor, snapshot);
+                return;
+            }
 
             if (distance < deadZone)
                 return;
@@ -268,6 +301,49 @@ namespace CupheadOnline.Patches
             motor.transform.position = distance > snapDistance
                 ? target
                 : Vector3.Lerp(motor.transform.position, target, blend);
+        }
+
+        static bool TryGetHostAuthoritativeSnapshot(PlayerId playerId, out PlayerStatePacket snapshot)
+        {
+            return RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot);
+        }
+
+        static void ApplyClientBuiltInReviveCorrection(LevelPlayerMotor motor, PlayerId playerId)
+        {
+            if (motor == null
+             || !ParticipantReviveController.ShouldCorrectRecentlyRevivedBuiltInPlayer(playerId))
+            {
+                return;
+            }
+
+            PlayerStatePacket snapshot;
+            if (!RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot)
+             || snapshot.IsMapState)
+            {
+                return;
+            }
+            if (snapshot.IsDead)
+                return;
+
+            var target = GetRawPosition(snapshot, motor.transform.position.z);
+            float distance = Vector2.Distance(motor.transform.position, target);
+            if (snapshot.Grounded || snapshot.PosY <= BuiltInReviveSettledY)
+            {
+                motor.transform.position = target;
+                ApplySnapshotMotorState(motor, snapshot);
+                return;
+            }
+
+            if (distance < 0.5f)
+            {
+                ApplySnapshotMotorState(motor, snapshot);
+                return;
+            }
+
+            motor.transform.position = distance > 12f
+                ? target
+                : Vector3.Lerp(motor.transform.position, target, 0.85f);
+            ApplySnapshotMotorState(motor, snapshot);
         }
 
         static void ApplyHighLatencyRemoteBuiltInPosition(LevelPlayerMotor motor, PlayerId playerId)
@@ -302,6 +378,39 @@ namespace CupheadOnline.Patches
 
             RemotePlayer.UpdateStateTransitions(playerId, motor, s);
             ApplyRemoteAnimation(motor.player, s);
+        }
+
+        static void ApplySnapshotMotorState(LevelPlayerMotor motor, PlayerStatePacket snapshot)
+        {
+            if (motor == null)
+                return;
+
+            var t = Traverse.Create(motor);
+            t.Property("LookDirection").SetValue(new Trilean2(snapshot.LookX, snapshot.LookY));
+            t.Property("TrueLookDirection").SetValue(new Trilean2(snapshot.LookX, snapshot.LookY));
+            t.Property("Grounded").SetValue(snapshot.Grounded);
+            t.Property("Dashing").SetValue(snapshot.Dashing);
+            t.Property("Ducking").SetValue(snapshot.Ducking);
+            t.Property("GravityReversed").SetValue(snapshot.GravReversed);
+            t.Property("IsHit").SetValue(snapshot.IsHit);
+            t.Property("IsUsingSuperOrEx").SetValue(snapshot.IsSuper);
+            var velocity = new Vector2(snapshot.VelX, snapshot.VelY);
+            if (snapshot.Grounded || snapshot.PosY <= BuiltInReviveSettledY)
+                velocity = Vector2.zero;
+
+            TrySetMotorVelocity(motor, velocity);
+            ApplyRemoteAnimation(motor.player, snapshot);
+        }
+
+        static void TrySetMotorVelocity(LevelPlayerMotor motor, Vector2 velocity)
+        {
+            try
+            {
+                Traverse.Create(motor).Property("velocity").SetValue(velocity);
+            }
+            catch
+            {
+            }
         }
 
         static Vector2 EstimateOutgoingVelocity(byte playerId, Vector2 position)

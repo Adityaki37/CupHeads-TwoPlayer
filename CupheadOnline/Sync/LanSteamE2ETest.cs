@@ -50,6 +50,15 @@ namespace CupheadOnline.Sync
         const float PauseTimeout = 8f;
         const float ReviveSmokeTimeout = 12f;
         const float ReviveSettledY = -225f;
+        const float ScriptedReviveDonorX = -350f;
+        const float ScriptedReviveBodyX = -470f;
+        const float ScriptedReverseReviveDonorX = 350f;
+        const float ScriptedReverseReviveBodyX = 470f;
+        const float ScriptedReviveGroundY = -250f;
+        const float ScriptedReviveJumpPressSeconds = 0.35f;
+        const float ScriptedReviveParryPressSeconds = 0.24f;
+        const float ScriptedReviveParryTriggerSeconds = 0.12f;
+        const float ScriptedReviveHeartHoldSeconds = 1.25f;
         const float GameOverTimeout = 12f;
         const float RetryTimeout = 35f;
         const float LevelStartVisualSyncTimeout = 20f;
@@ -132,8 +141,14 @@ namespace CupheadOnline.Sync
         static bool _clientReverseReviveDeathForced;
         static bool _clientReverseReviveMirrorVerified;
         static bool _clientReverseReviveObservedSignalReceived;
+        static bool _clientReviveSwitchTriggered;
+        static bool _clientReverseReviveSwitchTriggered;
         static bool _clientReverseReviveJumpPressed;
         static bool _clientReverseReviveParryPressed;
+        static bool _clientReviveDonorJumpObserved;
+        static bool _clientReviveDonorParryObserved;
+        static bool _clientReverseReviveMotorJumpObserved;
+        static bool _clientReverseReviveMotorParryObserved;
         static bool _clientGuestOnlyLaneLogged;
         static bool _hostPausePressed;
         static bool _hostPauseObserved;
@@ -143,6 +158,8 @@ namespace CupheadOnline.Sync
         static bool _hostReviveDeathForced;
         static bool _hostReviveJumpPressed;
         static bool _hostReviveParryPressed;
+        static bool _hostReviveMotorJumpObserved;
+        static bool _hostReviveMotorParryObserved;
         static bool _hostReviveSwitchTriggered;
         static bool _hostReviveAnimCompleteTriggered;
         static bool _hostReviveVerified;
@@ -173,15 +190,26 @@ namespace CupheadOnline.Sync
         static bool _clientDialogueInteractPressed;
         static bool _clientDialogueAdvancePressed;
         static float _clientReviveDeathAt;
+        static float _clientReviveDeathClock;
         static float _clientReverseReviveDeathAt;
+        static float _clientReverseReviveDeathClock;
         static float _clientReverseReviveJumpAt;
         static float _clientReverseReviveParryAt;
+        static float _clientReviveDonorJumpObservedAt;
+        static float _clientReviveDonorParryObservedAt;
+        static float _clientReverseReviveMotorJumpObservedAt;
+        static float _clientReverseReviveMotorParryObservedAt;
+        static long _clientReviveStartUtcTicks;
+        static long _clientReverseReviveStartUtcTicks;
         static float _hostReviveDeathAt;
+        static float _hostReviveDeathClock;
         static float _hostReviveStartAt;
         static float _hostReviveJumpAt;
         static float _hostReviveParryAt;
+        static float _hostReviveMotorJumpAt;
         static float _hostReviveVerifiedAt;
         static float _hostReverseReviveDeathAt;
+        static float _hostReverseReviveDeathClock;
         static float _hostReverseReviveStartAt;
         static float _hostReverseReviveJumpAt;
         static float _hostReverseReviveParryAt;
@@ -234,6 +262,8 @@ namespace CupheadOnline.Sync
         static float _clientVisualCombatVerifiedAt;
         static float _hostVisualCombatLastSampleAt;
         static float _clientVisualCombatLastSampleAt;
+        static float _hostReviveLastSampleAt;
+        static float _clientReviveLastSampleAt;
         static float _lastProjectileScanAt;
         static bool _guestOnlyDamageStarted;
         static bool _guestOnlyDamageVerified;
@@ -378,7 +408,10 @@ namespace CupheadOnline.Sync
                     if (MultiplayerSession.IsClient)
                     {
                         _clientReviveTestStartSignalReceived = true;
-                        Log("Received host built-in death/parry revive smoke start.");
+                        _clientReviveStartUtcTicks = pkt.UtcReleaseTicks;
+                        Log("Received host built-in death/parry revive smoke start"
+                            + ReleaseTargetSuffix(pkt.UtcReleaseTicks)
+                            + ".");
                     }
                     return true;
                 case SessionSignalKind.LanSteamE2EReviveObserved:
@@ -392,7 +425,10 @@ namespace CupheadOnline.Sync
                     if (MultiplayerSession.IsClient)
                     {
                         _clientReverseReviveTestStartSignalReceived = true;
-                        Log("Received host reverse built-in death/parry revive smoke start.");
+                        _clientReverseReviveStartUtcTicks = pkt.UtcReleaseTicks;
+                        Log("Received host reverse built-in death/parry revive smoke start"
+                            + ReleaseTargetSuffix(pkt.UtcReleaseTicks)
+                            + ".");
                     }
                     return true;
                 case SessionSignalKind.LanSteamE2EReverseReviveObserved:
@@ -2080,7 +2116,34 @@ namespace CupheadOnline.Sync
             LevelPlayerController p2,
             ref float lastSampleAt)
         {
-            if (!Plugin.AutoRunLanSteamE2EVisualOnly)
+            LogPlayerPositionSample(
+                role,
+                "combat",
+                p1,
+                p2,
+                ref lastSampleAt,
+                Plugin.AutoRunLanSteamE2EVisualOnly);
+        }
+
+        static void LogRevivePositionSample(
+            string role,
+            string context,
+            LevelPlayerController p1,
+            LevelPlayerController p2,
+            ref float lastSampleAt)
+        {
+            LogPlayerPositionSample(role, context, p1, p2, ref lastSampleAt, true);
+        }
+
+        static void LogPlayerPositionSample(
+            string role,
+            string context,
+            LevelPlayerController p1,
+            LevelPlayerController p2,
+            ref float lastSampleAt,
+            bool enabled)
+        {
+            if (!enabled)
                 return;
 
             float now = Time.unscaledTime;
@@ -2092,6 +2155,7 @@ namespace CupheadOnline.Sync
                 + " clock=" + HighLatencyInputSync.PacketTimeNow().ToString("0.000")
                 + " unscaled=" + Time.unscaledTime.ToString("0.000")
                 + " frame=" + Time.frameCount
+                + " context=" + context
                 + ": P1=" + DescribeLevelPlayer(p1)
                 + "; P2=" + DescribeLevelPlayer(p2)
                 + "; boss=" + BossHealthBarOverlay.GetDebugSummary()
@@ -3122,9 +3186,12 @@ namespace CupheadOnline.Sync
 
             if (!_hostReviveStartSignalSent)
             {
+                float delay = EstimateScriptedStartDelaySeconds();
                 _hostReviveStartSignalSent = true;
-                _hostReviveStartAt = Time.unscaledTime + EstimateScriptedStartDelaySeconds();
-                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReviveTestStarted);
+                _hostReviveStartAt = Time.unscaledTime + delay;
+                SendDialogueObservedSignal(
+                    SessionSignalKind.LanSteamE2EReviveTestStarted,
+                    UtcTicksAfterSeconds(delay));
                 Log("Starting built-in death/parry revive smoke after "
                     + Mathf.Max(0f, _hostReviveStartAt - Time.unscaledTime).ToString("0.000")
                     + "s latency alignment; client will put local Player Two into the same dead state.");
@@ -3135,11 +3202,15 @@ namespace CupheadOnline.Sync
                 if (Time.unscaledTime < _hostReviveStartAt)
                     return false;
 
+                PrepareScriptedRevivePositions(p1, p2, PlayerId.PlayerTwo);
+                ResetBuiltInInputBuffersForRevive(PlayerId.PlayerOne, PlayerId.PlayerTwo, "host Player Two revive");
+
                 if (!ForceBuiltInPlayerDeath(p2, "host"))
                     return false;
 
                 _hostReviveDeathForced = true;
                 _hostReviveDeathAt = Time.unscaledTime;
+                _hostReviveDeathClock = HighLatencyInputSync.PacketTimeNow();
                 Log("Host forced Player Two through the real level death path: " + DescribeLevelPlayer(p2) + ".");
                 CaptureScreen("host_revive_dead_" + SceneManager.GetActiveScene().name);
                 return false;
@@ -3148,6 +3219,7 @@ namespace CupheadOnline.Sync
             if (!_hostReviveVerified)
             {
                 var effect = FindPlayerDeathEffect(PlayerId.PlayerTwo);
+                LogRevivePositionSample("host", "p2-revive", p1, p2, ref _hostReviveLastSampleAt);
                 bool fullyRevived = !p2.IsDead
                     && p2.stats.Health > 0
                     && p2.gameObject.activeInHierarchy;
@@ -3157,6 +3229,7 @@ namespace CupheadOnline.Sync
                     if (_hostReviveSwitchTriggered
                      && !_hostReviveAnimCompleteTriggered
                      && effect != null
+                     && !ParticipantReviveController.IsHostBuiltInParrySwitchPending(effect)
                      && Time.unscaledTime - _hostReviveParryAt > 0.45f)
                     {
                         CompleteDeathBubbleParryAnimation(effect);
@@ -3171,7 +3244,7 @@ namespace CupheadOnline.Sync
                     if (effect != null)
                         DriveHostJumpParryRevive(p1, effect);
 
-                    if (_hostReviveParryPressed && Time.unscaledTime - _hostReviveParryAt > ReviveSmokeTimeout)
+                    if (_hostReviveMotorParryObserved && Time.unscaledTime - _hostReviveParryAt > ReviveSmokeTimeout)
                     {
                         Fail("Host Player One jump/parry did not revive Player Two through the built-in death bubble.");
                         return false;
@@ -3228,9 +3301,12 @@ namespace CupheadOnline.Sync
 
             if (!_hostReverseReviveStartSignalSent)
             {
+                float delay = EstimateScriptedStartDelaySeconds();
                 _hostReverseReviveStartSignalSent = true;
-                _hostReverseReviveStartAt = Time.unscaledTime + EstimateScriptedStartDelaySeconds();
-                SendDialogueObservedSignal(SessionSignalKind.LanSteamE2EReverseReviveTestStarted);
+                _hostReverseReviveStartAt = Time.unscaledTime + delay;
+                SendDialogueObservedSignal(
+                    SessionSignalKind.LanSteamE2EReverseReviveTestStarted,
+                    UtcTicksAfterSeconds(delay));
                 Log("Starting reverse built-in death/parry revive smoke after "
                     + Mathf.Max(0f, _hostReverseReviveStartAt - Time.unscaledTime).ToString("0.000")
                     + "s latency alignment; client will put local Player One into the same dead state and drive Player Two jump/parry.");
@@ -3241,11 +3317,15 @@ namespace CupheadOnline.Sync
                 if (Time.unscaledTime < _hostReverseReviveStartAt)
                     return false;
 
+                PrepareScriptedRevivePositions(p1, p2, PlayerId.PlayerOne);
+                ResetBuiltInInputBuffersForRevive(PlayerId.PlayerOne, PlayerId.PlayerTwo, "host Player One revive");
+
                 if (!ForceBuiltInPlayerDeath(p1, "host reverse"))
                     return false;
 
                 _hostReverseReviveDeathForced = true;
                 _hostReverseReviveDeathAt = Time.unscaledTime;
+                _hostReverseReviveDeathClock = HighLatencyInputSync.PacketTimeNow();
                 Log("Host forced Player One through the real level death path: " + DescribeLevelPlayer(p1) + ".");
                 CaptureScreen("host_reverse_revive_dead_" + SceneManager.GetActiveScene().name);
                 return false;
@@ -3254,6 +3334,7 @@ namespace CupheadOnline.Sync
             if (!_hostReverseReviveVerified)
             {
                 var effect = FindPlayerDeathEffect(PlayerId.PlayerOne);
+                LogRevivePositionSample("host", "p1-revive", p1, p2, ref _hostReviveLastSampleAt);
                 bool fullyRevived = !p1.IsDead
                     && p1.stats.Health > 0
                     && p1.gameObject.activeInHierarchy;
@@ -3263,6 +3344,7 @@ namespace CupheadOnline.Sync
                     if (_hostReverseReviveSwitchTriggered
                      && !_hostReverseReviveAnimCompleteTriggered
                      && effect != null
+                     && !ParticipantReviveController.IsHostBuiltInParrySwitchPending(effect)
                      && Time.unscaledTime - _hostReverseReviveParryAt > 0.45f)
                     {
                         CompleteReverseDeathBubbleParryAnimation(effect);
@@ -3335,6 +3417,7 @@ namespace CupheadOnline.Sync
             if (!_clientReviveTestStartSignalReceived)
                 return;
 
+            var p1 = PlayerManager.GetPlayer(PlayerId.PlayerOne) as LevelPlayerController;
             if (p2 == null || p2.stats == null)
             {
                 Fail("Cannot verify client built-in revive mirror; Player Two is missing.");
@@ -3343,14 +3426,43 @@ namespace CupheadOnline.Sync
 
             if (!_clientReviveDeathForced)
             {
+                if (_clientReviveStartUtcTicks > 0L
+                 && !IsUtcReleaseDue(_clientReviveStartUtcTicks))
+                {
+                    return;
+                }
+
+                ResetBuiltInInputBuffersForRevive(PlayerId.PlayerTwo, PlayerId.PlayerOne, "client Player Two revive");
+                PrepareScriptedRevivePositions(p1, p2, PlayerId.PlayerTwo);
+
                 if (!ForceBuiltInPlayerDeath(p2, "client"))
                     return;
 
                 _clientReviveDeathForced = true;
                 _clientReviveDeathAt = Time.unscaledTime;
+                _clientReviveDeathClock = HighLatencyInputSync.PacketTimeNow();
                 Log("Client forced local Player Two through the real level death path; waiting for host parry status.");
                 CaptureScreen("client_revive_dead_" + SceneManager.GetActiveScene().name);
                 return;
+            }
+
+            LogRevivePositionSample("client", "p2-revive", p1, p2, ref _clientReviveLastSampleAt);
+
+            var effect = FindPlayerDeathEffect(PlayerId.PlayerTwo);
+            if (effect != null && p1 != null)
+            {
+                DriveClientObservedPlayerOneJumpParryRevive(p1, effect);
+                if (!_clientReviveSwitchTriggered
+                 && _clientReviveDonorParryObserved
+                 && IsScheduledReviveParryTriggerDue(_clientReviveDeathClock))
+                {
+                    TriggerClientObservedDeathBubbleParrySwitch(
+                        p1,
+                        effect,
+                        PlayerId.PlayerTwo,
+                        ref _clientReviveSwitchTriggered,
+                        "Client mirrored Player One's scripted jump/parry into Player Two's death-bubble parry switch.");
+                }
             }
 
             bool fullyRevived = !p2.IsDead
@@ -3390,14 +3502,43 @@ namespace CupheadOnline.Sync
 
             if (!_clientReverseReviveDeathForced)
             {
+                if (_clientReverseReviveStartUtcTicks > 0L
+                 && !IsUtcReleaseDue(_clientReverseReviveStartUtcTicks))
+                {
+                    return;
+                }
+
+                ResetBuiltInInputBuffersForRevive(PlayerId.PlayerTwo, PlayerId.PlayerOne, "client Player One revive");
+                PrepareScriptedRevivePositions(p1, p2, PlayerId.PlayerOne);
+
                 if (!ForceBuiltInPlayerDeath(p1, "client reverse"))
                     return;
 
                 _clientReverseReviveDeathForced = true;
                 _clientReverseReviveDeathAt = Time.unscaledTime;
+                _clientReverseReviveDeathClock = HighLatencyInputSync.PacketTimeNow();
                 Log("Client forced local Player One through the real level death path; driving Player Two jump/parry and waiting for host revive status.");
                 CaptureScreen("client_reverse_revive_dead_" + SceneManager.GetActiveScene().name);
                 return;
+            }
+
+            LogRevivePositionSample("client", "p1-revive", p1, p2, ref _clientReviveLastSampleAt);
+
+            var effect = FindPlayerDeathEffect(PlayerId.PlayerOne);
+            if (effect != null)
+            {
+                DriveClientObservedPlayerTwoJumpParryRevive(p2, effect);
+                if (!_clientReverseReviveSwitchTriggered
+                 && _clientReverseReviveMotorParryObserved
+                 && IsScheduledReviveParryTriggerDue(_clientReverseReviveDeathClock))
+                {
+                    TriggerClientObservedDeathBubbleParrySwitch(
+                        p2,
+                        effect,
+                        PlayerId.PlayerOne,
+                        ref _clientReverseReviveSwitchTriggered,
+                        "Client mirrored Player Two's scripted jump/parry into Player One's death-bubble parry switch.");
+                }
             }
 
             if (!_clientReverseReviveJumpPressed)
@@ -3454,8 +3595,8 @@ namespace CupheadOnline.Sync
 
             if (!_hostReviveJumpPressed)
             {
-                PlaceDeathBubbleForHostParry(p1, effect, 70f);
-                if (Time.unscaledTime - _hostReviveDeathAt <= 0.35f)
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_hostReviveDeathClock));
+                if (Time.unscaledTime - _hostReviveDeathAt <= ScriptedReviveJumpPressSeconds)
                     return;
 
                 _hostReviveJumpPressed = true;
@@ -3467,22 +3608,49 @@ namespace CupheadOnline.Sync
 
             if (!_hostReviveParryPressed)
             {
-                PlaceDeathBubbleForHostParry(p1, effect, 35f);
-                if (Time.unscaledTime - _hostReviveJumpAt <= 0.24f)
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_hostReviveDeathClock));
+                if (Time.unscaledTime - _hostReviveJumpAt <= ScriptedReviveParryPressSeconds)
                     return;
 
                 _hostReviveParryPressed = true;
-                _hostReviveParryAt = Time.unscaledTime;
                 PressHost(CupheadButton.Jump);
                 Log("Host pressed Player One second jump/parry against Player Two's death bubble.");
                 return;
             }
 
-            if (Time.unscaledTime - _hostReviveParryAt <= 1.25f)
-                PlaceDeathBubbleForHostParry(p1, effect, 0f);
+            if (!_hostReviveMotorJumpObserved)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_hostReviveDeathClock));
+                if (!IsScheduledReviveJumpDue(_hostReviveDeathClock))
+                    return;
 
-            if (!_hostReviveSwitchTriggered && Time.unscaledTime - _hostReviveParryAt > 0.12f)
+                _hostReviveMotorJumpObserved = true;
+                _hostReviveMotorJumpAt = Time.unscaledTime;
+                Log("Host observed delayed Player One jump for Player Two death-bubble placement.");
+                return;
+            }
+
+            if (!_hostReviveMotorParryObserved)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_hostReviveDeathClock));
+                if (!IsScheduledReviveParryDue(_hostReviveDeathClock))
+                    return;
+
+                _hostReviveMotorParryObserved = true;
+                _hostReviveParryAt = Time.unscaledTime;
+                Log("Host observed delayed Player One second jump/parry for Player Two death-bubble placement.");
+                return;
+            }
+
+            if (IsScheduledReviveHeartHoldActive(_hostReviveDeathClock))
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_hostReviveDeathClock));
+
+            if (!_hostReviveSwitchTriggered
+             && _hostReviveMotorParryObserved
+             && IsScheduledReviveParryTriggerDue(_hostReviveDeathClock))
+            {
                 TriggerDeathBubbleParrySwitch(p1, effect);
+            }
         }
 
         static void DriveHostPlayerTwoJumpParryRevive(LevelPlayerController p2, PlayerDeathEffect effect)
@@ -3492,11 +3660,8 @@ namespace CupheadOnline.Sync
 
             if (!_hostReverseReviveJumpPressed)
             {
-                PlaceDeathBubbleForHostParry(p2, effect, 70f);
-                if (Time.unscaledTime - _hostReverseReviveDeathAt <= 0.35f)
-                    return;
-
-                if (!RemoteInputDriver.PeekPressedThisFrame((byte)PlayerId.PlayerTwo, CupheadButton.Jump))
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_hostReverseReviveDeathClock));
+                if (!IsScheduledReviveJumpDue(_hostReverseReviveDeathClock))
                     return;
 
                 _hostReverseReviveJumpPressed = true;
@@ -3507,11 +3672,8 @@ namespace CupheadOnline.Sync
 
             if (!_hostReverseReviveParryPressed)
             {
-                PlaceDeathBubbleForHostParry(p2, effect, 35f);
-                if (Time.unscaledTime - _hostReverseReviveJumpAt <= 0.24f)
-                    return;
-
-                if (!RemoteInputDriver.PeekPressedThisFrame((byte)PlayerId.PlayerTwo, CupheadButton.Jump))
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_hostReverseReviveDeathClock));
+                if (!IsScheduledReviveParryDue(_hostReverseReviveDeathClock))
                     return;
 
                 _hostReverseReviveParryPressed = true;
@@ -3520,11 +3682,203 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            if (Time.unscaledTime - _hostReverseReviveParryAt <= 1.25f)
-                PlaceDeathBubbleForHostParry(p2, effect, 0f);
+            if (IsScheduledReviveHeartHoldActive(_hostReverseReviveDeathClock))
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_hostReverseReviveDeathClock));
 
-            if (!_hostReverseReviveSwitchTriggered && Time.unscaledTime - _hostReverseReviveParryAt > 0.12f)
+            if (!_hostReverseReviveSwitchTriggered && IsScheduledReviveParryTriggerDue(_hostReverseReviveDeathClock))
                 TriggerReverseDeathBubbleParrySwitch(p2, effect);
+        }
+
+        static void DriveClientObservedPlayerOneJumpParryRevive(LevelPlayerController p1, PlayerDeathEffect effect)
+        {
+            if (p1 == null || effect == null)
+                return;
+
+            if (!_clientReviveDonorJumpObserved)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_clientReviveDeathClock));
+                if (!IsScheduledReviveJumpDue(_clientReviveDeathClock))
+                    return;
+
+                _clientReviveDonorJumpObserved = true;
+                _clientReviveDonorJumpObservedAt = Time.unscaledTime;
+                Log("Client observed delayed Player One jump for Player Two death-bubble placement.");
+                return;
+            }
+
+            if (!_clientReviveDonorParryObserved)
+            {
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_clientReviveDeathClock));
+                if (!IsScheduledReviveParryDue(_clientReviveDeathClock))
+                    return;
+
+                _clientReviveDonorParryObserved = true;
+                _clientReviveDonorParryObservedAt = Time.unscaledTime;
+                Log("Client observed delayed Player One second jump/parry for Player Two death-bubble placement.");
+                return;
+            }
+
+            if (IsScheduledReviveHeartHoldActive(_clientReviveDeathClock))
+                PlaceDeathBubbleForHostParry(p1, effect, GetScheduledReviveHeartOffset(_clientReviveDeathClock));
+        }
+
+        static void DriveClientObservedPlayerTwoJumpParryRevive(LevelPlayerController p2, PlayerDeathEffect effect)
+        {
+            if (p2 == null || effect == null)
+                return;
+
+            if (!_clientReverseReviveMotorJumpObserved)
+            {
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_clientReverseReviveDeathClock));
+                if (!IsScheduledReviveJumpDue(_clientReverseReviveDeathClock))
+                    return;
+
+                _clientReverseReviveMotorJumpObserved = true;
+                _clientReverseReviveMotorJumpObservedAt = Time.unscaledTime;
+                Log("Client observed delayed Player Two jump for Player One death-bubble placement.");
+                return;
+            }
+
+            if (!_clientReverseReviveMotorParryObserved)
+            {
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_clientReverseReviveDeathClock));
+                if (!IsScheduledReviveParryDue(_clientReverseReviveDeathClock))
+                    return;
+
+                _clientReverseReviveMotorParryObserved = true;
+                _clientReverseReviveMotorParryObservedAt = Time.unscaledTime;
+                Log("Client observed delayed Player Two second jump/parry for Player One death-bubble placement.");
+                return;
+            }
+
+            if (IsScheduledReviveHeartHoldActive(_clientReverseReviveDeathClock))
+                PlaceDeathBubbleForHostParry(p2, effect, GetScheduledReviveHeartOffset(_clientReverseReviveDeathClock));
+        }
+
+        static float GetScheduledReviveHeartOffset(float deathClock)
+        {
+            if (IsScheduledReviveParryDue(deathClock))
+                return 0f;
+            return IsScheduledReviveJumpDue(deathClock) ? 35f : 70f;
+        }
+
+        static bool IsScheduledReviveJumpDue(float deathClock)
+        {
+            return GetScheduledReviveElapsed(deathClock)
+                >= ScriptedReviveJumpPressSeconds + HighLatencyInputSync.GetDelaySeconds();
+        }
+
+        static bool IsScheduledReviveParryDue(float deathClock)
+        {
+            return GetScheduledReviveElapsed(deathClock)
+                >= ScriptedReviveJumpPressSeconds
+                    + ScriptedReviveParryPressSeconds
+                    + HighLatencyInputSync.GetDelaySeconds();
+        }
+
+        static bool IsScheduledReviveParryTriggerDue(float deathClock)
+        {
+            return GetScheduledReviveElapsed(deathClock)
+                >= ScriptedReviveJumpPressSeconds
+                    + ScriptedReviveParryPressSeconds
+                    + HighLatencyInputSync.GetDelaySeconds()
+                    + ScriptedReviveParryTriggerSeconds;
+        }
+
+        static bool IsScheduledReviveHeartHoldActive(float deathClock)
+        {
+            return GetScheduledReviveElapsed(deathClock)
+                <= ScriptedReviveJumpPressSeconds
+                    + ScriptedReviveParryPressSeconds
+                    + HighLatencyInputSync.GetDelaySeconds()
+                    + ScriptedReviveHeartHoldSeconds;
+        }
+
+        static float GetScheduledReviveElapsed(float deathClock)
+        {
+            float clock = HighLatencyInputSync.PacketTimeNow();
+            if (clock < 0f || deathClock < 0f)
+                return 0f;
+            return Mathf.Max(0f, clock - deathClock);
+        }
+
+        static void ResetBuiltInInputBuffersForRevive(PlayerId localPlayerId, PlayerId remotePlayerId, string context)
+        {
+            if (!HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers())
+                return;
+
+            HighLatencyInputSync.ResetLocalPlayerInput(localPlayerId);
+            ClientInputFramePump.ResetHighLatencyHistory();
+            RemoteInputDriver.ResetDroppingOlderPackets(remotePlayerId);
+            Log("Reset high-latency input buffers for " + context + ".");
+        }
+
+        static void PrepareScriptedRevivePositions(LevelPlayerController p1, LevelPlayerController p2, PlayerId dyingPlayerId)
+        {
+            ParticipantReviveController.CancelRecentBuiltInReviveCorrection(
+                PlayerId.PlayerOne,
+                "before scripted revive placement");
+            ParticipantReviveController.CancelRecentBuiltInReviveCorrection(
+                PlayerId.PlayerTwo,
+                "before scripted revive placement");
+
+            if (dyingPlayerId == PlayerId.PlayerTwo)
+            {
+                SetScriptedRevivePlayerPosition(p1, ScriptedReviveDonorX);
+                SetScriptedRevivePlayerPosition(p2, ScriptedReviveBodyX);
+                return;
+            }
+
+            if (dyingPlayerId == PlayerId.PlayerOne)
+            {
+                SetScriptedRevivePlayerPosition(p1, ScriptedReverseReviveBodyX);
+                SetScriptedRevivePlayerPosition(p2, ScriptedReverseReviveDonorX);
+            }
+        }
+
+        static void SetScriptedRevivePlayerPosition(LevelPlayerController player, float x)
+        {
+            if (player == null)
+                return;
+
+            Vector3 playerPos = player.transform.position;
+            player.transform.position = new Vector3(x, ScriptedReviveGroundY, playerPos.z);
+
+            if (player.motor == null)
+                return;
+
+            Vector3 motorPos = player.motor.transform.position;
+            player.motor.transform.position = new Vector3(x, ScriptedReviveGroundY, motorPos.z);
+            SetMotorMember(player.motor, "velocity", Vector2.zero);
+            SetMotorMember(player.motor, "Grounded", true);
+            SetMotorMember(player.motor, "Dashing", false);
+            SetMotorMember(player.motor, "Locked", false);
+            SetMotorMember(player.motor, "IsHit", false);
+            ParticipantReviveController.ReleaseBuiltInReviveMotorForImmediateControl(player);
+        }
+
+        static void SetMotorMember(LevelPlayerMotor motor, string name, object value)
+        {
+            if (motor == null || string.IsNullOrEmpty(name))
+                return;
+
+            var type = motor.GetType();
+            try
+            {
+                var property = type.GetProperty(name, InstanceAny);
+                if (property != null && property.CanWrite)
+                {
+                    property.SetValue(motor, value, null);
+                    return;
+                }
+
+                var field = type.GetField(name, InstanceAny);
+                if (field != null)
+                    field.SetValue(motor, value);
+            }
+            catch
+            {
+            }
         }
 
         static void PlaceDeathBubbleForHostParry(LevelPlayerController p1, PlayerDeathEffect effect, float yOffset)
@@ -3590,6 +3944,40 @@ namespace CupheadOnline.Sync
             catch (Exception ex)
             {
                 Fail("Host could not activate Player One's death-bubble parry switch after Player Two jump/parry input: " + ex.Message + ".");
+            }
+        }
+
+        static void TriggerClientObservedDeathBubbleParrySwitch(
+            LevelPlayerController donor,
+            PlayerDeathEffect effect,
+            PlayerId targetPlayerId,
+            ref bool triggered,
+            string logMessage)
+        {
+            if (donor == null || effect == null)
+                return;
+            if (PlayerDeathEffectParrySwitchField == null
+             || ParrySwitchOnParryPrePauseMethod == null
+             || ParrySwitchOnParryPostPauseMethod == null)
+            {
+                return;
+            }
+
+            var parrySwitch = PlayerDeathEffectParrySwitchField.GetValue(effect) as PlayerDeathParrySwitch;
+            if (parrySwitch == null)
+                return;
+
+            try
+            {
+                triggered = true;
+                PlaceDeathBubbleForHostParry(donor, effect, 0f);
+                ParrySwitchOnParryPrePauseMethod.Invoke(parrySwitch, new object[] { donor });
+                ParrySwitchOnParryPostPauseMethod.Invoke(parrySwitch, new object[] { donor });
+                Log(logMessage);
+            }
+            catch (Exception ex)
+            {
+                Fail("Client could not activate " + targetPlayerId + "'s death-bubble parry switch after the synchronized jump/parry input: " + ex.Message + ".");
             }
         }
 
@@ -3805,8 +4193,14 @@ namespace CupheadOnline.Sync
                 _clientReverseReviveDeathForced = false;
                 _clientReverseReviveMirrorVerified = false;
                 _clientReverseReviveObservedSignalReceived = false;
+                _clientReviveSwitchTriggered = false;
+                _clientReverseReviveSwitchTriggered = false;
                 _clientReverseReviveJumpPressed = false;
                 _clientReverseReviveParryPressed = false;
+                _clientReviveDonorJumpObserved = false;
+                _clientReviveDonorParryObserved = false;
+                _clientReverseReviveMotorJumpObserved = false;
+                _clientReverseReviveMotorParryObserved = false;
                 _clientGuestOnlyLaneLogged = false;
                 _hostPausePressed = false;
                 _hostPauseObserved = false;
@@ -3816,6 +4210,8 @@ namespace CupheadOnline.Sync
                 _hostReviveDeathForced = false;
                 _hostReviveJumpPressed = false;
                 _hostReviveParryPressed = false;
+                _hostReviveMotorJumpObserved = false;
+                _hostReviveMotorParryObserved = false;
                 _hostReviveSwitchTriggered = false;
                 _hostReviveAnimCompleteTriggered = false;
                 _hostReviveVerified = false;
@@ -3856,10 +4252,17 @@ namespace CupheadOnline.Sync
                 _clientReverseReviveDeathAt = 0f;
                 _clientReverseReviveJumpAt = 0f;
                 _clientReverseReviveParryAt = 0f;
+                _clientReviveDonorJumpObservedAt = 0f;
+                _clientReviveDonorParryObservedAt = 0f;
+                _clientReverseReviveMotorJumpObservedAt = 0f;
+                _clientReverseReviveMotorParryObservedAt = 0f;
+                _clientReviveStartUtcTicks = 0L;
+                _clientReverseReviveStartUtcTicks = 0L;
                 _hostReviveDeathAt = 0f;
                 _hostReviveStartAt = 0f;
                 _hostReviveJumpAt = 0f;
                 _hostReviveParryAt = 0f;
+                _hostReviveMotorJumpAt = 0f;
                 _hostReviveVerifiedAt = 0f;
                 _hostReverseReviveDeathAt = 0f;
                 _hostReverseReviveStartAt = 0f;
@@ -3907,6 +4310,8 @@ namespace CupheadOnline.Sync
                 _clientVisualCombatVerifiedAt = 0f;
                 _hostVisualCombatLastSampleAt = 0f;
                 _clientVisualCombatLastSampleAt = 0f;
+                _hostReviveLastSampleAt = 0f;
+                _clientReviveLastSampleAt = 0f;
                 _lastProjectileScanAt = 0f;
                 _guestOnlyDamageStarted = false;
                 _guestOnlyDamageVerified = false;
@@ -4009,8 +4414,33 @@ namespace CupheadOnline.Sync
             if (player == null)
                 return "missing";
             Vector3 pos = player.transform.position;
+            Vector3 visiblePos = pos;
+            bool usingDeathEffect = false;
+            if (player.IsDead)
+            {
+                var effect = FindPlayerDeathEffect(player.id);
+                if (effect != null)
+                {
+                    visiblePos = effect.transform.position;
+                    usingDeathEffect = true;
+                }
+            }
+
             string health = player.stats == null ? "no-stats" : player.stats.Health + "/" + player.stats.HealthMax;
-            return player.id + " dead=" + player.IsDead + " hp=" + health + " pos=(" + pos.x.ToString("0.00") + "," + pos.y.ToString("0.00") + ")";
+            string text = player.id
+                + " dead=" + player.IsDead
+                + " hp=" + health
+                + " pos=(" + visiblePos.x.ToString("0.00") + "," + visiblePos.y.ToString("0.00") + ")";
+            if (usingDeathEffect)
+            {
+                text += " bodyPos=("
+                    + pos.x.ToString("0.00")
+                    + ","
+                    + pos.y.ToString("0.00")
+                    + ")";
+            }
+
+            return text;
         }
     }
 }

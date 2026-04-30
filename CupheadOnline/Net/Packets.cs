@@ -749,6 +749,7 @@ namespace CupheadOnline.Net
         public float HostBattleElapsed;
 
         public bool ParrySwitch => (Flags & 1) != 0;
+        public bool PositionOnly => (Flags & 4) != 0;
         public bool HasHostBattleElapsed => HostBattleElapsed >= 0f;
 
         public void Write(BinaryWriter w)

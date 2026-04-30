@@ -301,6 +301,11 @@ namespace CupheadOnline.Patches
             Plugin.Net.SendInputFrame(ref packet);
         }
 
+        internal static void ResetHighLatencyHistory()
+        {
+            _recentHighLatencyInputs.Clear();
+        }
+
         static void ResendRecentHighLatencyInputs()
         {
             if (!HighLatencyInputSync.ShouldDelayNetworkGameplayInput((byte)MultiplayerSession.LocalId))

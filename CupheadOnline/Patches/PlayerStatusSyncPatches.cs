@@ -46,7 +46,11 @@ namespace CupheadOnline.Patches
     {
         static bool Prefix(PlayerDeathEffect __instance)
         {
+            if (ParticipantReviveController.TryScheduleHostBuiltInParrySwitch(__instance))
+                return false;
             if (ExtraParticipantReviveVisuals.HandleParrySwitch(__instance))
+                return false;
+            if (ParticipantReviveController.TrySuppressClientBuiltInParrySwitchUntilHost(__instance))
                 return false;
             return !ParticipantReviveController.TryPlayClientRemoteBuiltInParryVisualOnly(__instance);
         }

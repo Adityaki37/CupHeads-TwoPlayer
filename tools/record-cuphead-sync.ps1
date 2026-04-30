@@ -789,12 +789,15 @@ $clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "
 
 function Parse-VisualPlayerSamples([string]$text, [string]$role) {
     $samples = @()
-    $pattern = "Visual sample $role clock=(?<clock>-?\d+(?:\.\d+)?).*?P1=.*? dead=(?<p1dead>True|False) .*? pos=\((?<p1x>-?\d+(?:\.\d+)?),(?<p1y>-?\d+(?:\.\d+)?)\); P2=.*? dead=(?<p2dead>True|False) .*? pos=\((?<p2x>-?\d+(?:\.\d+)?),(?<p2y>-?\d+(?:\.\d+)?)\)"
+    $coord = "-?\d+(?:\.\d+)?"
+    $optionalBody = "(?: bodyPos=\($coord,$coord\))?"
+    $pattern = "Visual sample $role clock=(?<clock>$coord).*? context=(?<context>[^:]+): P1=.*? dead=(?<p1dead>True|False) .*? pos=\((?<p1x>$coord),(?<p1y>$coord)\)$optionalBody; P2=.*? dead=(?<p2dead>True|False) .*? pos=\((?<p2x>$coord),(?<p2y>$coord)\)"
     foreach ($line in ($text -split "`r?`n")) {
         $m = [regex]::Match($line, $pattern)
         if (!$m.Success) { continue }
         $samples += [pscustomobject]@{
             Clock = [double]$m.Groups['clock'].Value
+            Context = $m.Groups['context'].Value
             P1Dead = [bool]::Parse($m.Groups['p1dead'].Value)
             P1X = [double]$m.Groups['p1x'].Value
             P1Y = [double]$m.Groups['p1y'].Value
@@ -834,17 +837,67 @@ function Parse-VisualPlayerSamples([string]$text, [string]$role) {
 }
 
 function Measure-PlayerPositionSync([object[]]$hostSamples, [object[]]$clientSamples) {
+    $clientByContext = @{}
+    foreach ($clientSample in $clientSamples) {
+        $contextKey = [string]$clientSample.Context
+        if (!$clientByContext.ContainsKey($contextKey)) {
+            $clientByContext[$contextKey] = New-Object System.Collections.ArrayList
+        }
+        [void]$clientByContext[$contextKey].Add($clientSample)
+    }
+    foreach ($key in @($clientByContext.Keys)) {
+        $clientByContext[$key] = @($clientByContext[$key] | Sort-Object Clock)
+    }
+
     $matches = @()
     $mismatches = @()
     $maxDelta = 0.0
     foreach ($hostSample in $hostSamples) {
         $best = $null
         $bestClockDelta = [double]::MaxValue
-        foreach ($clientSample in $clientSamples) {
+        $bestInterpolated = $false
+        $candidates = if ($clientByContext.ContainsKey([string]$hostSample.Context)) { @($clientByContext[[string]$hostSample.Context]) } else { @($clientSamples) }
+
+        $previous = $null
+        $next = $null
+        foreach ($clientSample in $candidates) {
             $clockDelta = [Math]::Abs($hostSample.Clock - $clientSample.Clock)
             if ($clockDelta -lt $bestClockDelta) {
                 $bestClockDelta = $clockDelta
                 $best = $clientSample
+            }
+
+            if ($clientSample.Clock -le $hostSample.Clock) {
+                if ($null -eq $previous -or $clientSample.Clock -gt $previous.Clock) {
+                    $previous = $clientSample
+                }
+            }
+            if ($clientSample.Clock -ge $hostSample.Clock) {
+                if ($null -eq $next -or $clientSample.Clock -lt $next.Clock) {
+                    $next = $clientSample
+                }
+            }
+        }
+
+        if ($null -ne $previous -and $null -ne $next -and $next.Clock -gt $previous.Clock -and ($next.Clock - $previous.Clock) -le 0.16) {
+            $canInterpolate =
+                ($previous.P1Dead -eq $next.P1Dead) -and
+                ($previous.P2Dead -eq $next.P2Dead)
+            if ($canInterpolate) {
+                $t = ($hostSample.Clock - $previous.Clock) / ($next.Clock - $previous.Clock)
+                $best = [pscustomobject]@{
+                    Clock = $hostSample.Clock
+                    Context = $hostSample.Context
+                    P1Dead = $previous.P1Dead
+                    P1X = $previous.P1X + (($next.P1X - $previous.P1X) * $t)
+                    P1Y = $previous.P1Y + (($next.P1Y - $previous.P1Y) * $t)
+                    P2Dead = $previous.P2Dead
+                    P2X = $previous.P2X + (($next.P2X - $previous.P2X) * $t)
+                    P2Y = $previous.P2Y + (($next.P2Y - $previous.P2Y) * $t)
+                    Line = "interpolated"
+                }
+                $bestClockDelta = 0.0
+                $bestInterpolated = $true
             }
         }
 
@@ -857,9 +910,11 @@ function Measure-PlayerPositionSync([object[]]$hostSamples, [object[]]$clientSam
             HostClock = [Math]::Round($hostSample.Clock, 3)
             ClientClock = [Math]::Round($best.Clock, 3)
             ClockDelta = [Math]::Round($bestClockDelta, 3)
+            Interpolated = [bool]$bestInterpolated
             P1Delta = [Math]::Round($p1Delta, 3)
             P2Delta = [Math]::Round($p2Delta, 3)
             DeadMatch = $deadMatch
+            Context = $hostSample.Context
             HostP1 = ("{0:0.00},{1:0.00}" -f $hostSample.P1X, $hostSample.P1Y)
             ClientP1 = ("{0:0.00},{1:0.00}" -f $best.P1X, $best.P1Y)
             HostP2 = ("{0:0.00},{1:0.00}" -f $hostSample.P2X, $hostSample.P2Y)
@@ -939,7 +994,7 @@ if ($blueObjectGateApplies -and $blueFrames.Count -ge 20 -and $blueSyncPassRatio
     $visualSyncFailure = " Visual frame sync below 95%: blue-object pass ratio " + $blueSyncPassRatio + " (" + ($blueFrames.Count - $blueMismatchFrames.Count) + "/" + $blueFrames.Count + ")."
     $syncHealthFailure = ($syncHealthFailure + $visualSyncFailure).Trim()
 }
-$playerPositionGateApplies = $VisualCombatOnly -and $playerPositionSync.SampleCount -ge 20
+$playerPositionGateApplies = $playerPositionSync.SampleCount -ge 20
 if ($playerPositionGateApplies -and $playerPositionSync.PassRatio -lt 0.95) {
     $failed = $true
     $playerPositionFailure = " Player position sync below 95%: pass ratio " + $playerPositionSync.PassRatio + " (" + ($playerPositionSync.SampleCount - $playerPositionSync.MismatchCount) + "/" + $playerPositionSync.SampleCount + "), max delta " + $playerPositionSync.MaxDelta + " world units."
