@@ -277,7 +277,7 @@ namespace CupheadOnline.Patches
 
     internal static class ClientInputFramePump
     {
-        const int HighLatencyInputHistoryFrames = 5;
+        const int HighLatencyInputHistoryFrames = 18;
         static readonly Queue<InputFramePacket> _recentHighLatencyInputs =
             new Queue<InputFramePacket>(HighLatencyInputHistoryFrames);
 
