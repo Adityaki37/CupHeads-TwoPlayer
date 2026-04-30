@@ -44,18 +44,21 @@ namespace CupheadOnline.Sync
         static Levels _clientLevel;
         static float _clientGateStartedAt;
         static long _clientReleaseUtcTicks;
+        static float _clientReleaseLocalAt;
         static bool _clientIntroGateActive;
         static bool _clientIntroGateComplete;
         static bool _clientIntroReadySent;
         static bool _clientIntroReleaseReceived;
         static float _clientIntroGateStartedAt;
         static long _clientIntroReleaseUtcTicks;
+        static float _clientIntroReleaseLocalAt;
         static bool _clientBattleGateActive;
         static bool _clientBattleGateComplete;
         static bool _clientBattleReadySent;
         static bool _clientBattleReleaseReceived;
         static float _clientBattleGateStartedAt;
         static long _clientBattleReleaseUtcTicks;
+        static float _clientBattleReleaseLocalAt;
         static Level.IntroProperties _clientPendingBattleIntro;
 
         static bool _holdingTimeScale;
@@ -67,9 +70,9 @@ namespace CupheadOnline.Sync
         public static bool IsHostWaitingForGuestStart => _hostGateActive
             || (_hostIntroGateActive && !_hostIntroGateComplete)
             || (_hostBattleGateActive && !_hostBattleGateComplete);
-        public static bool IsClientWaitingForStartRelease => (_clientGateActive && !IsReleaseDue(_clientReleaseReceived, _clientReleaseUtcTicks))
-            || (_clientIntroGateActive && !IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseUtcTicks))
-            || (_clientBattleGateActive && !IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseUtcTicks));
+        public static bool IsClientWaitingForStartRelease => (_clientGateActive && !IsReleaseDue(_clientReleaseReceived, _clientReleaseLocalAt, _clientReleaseUtcTicks))
+            || (_clientIntroGateActive && !IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseLocalAt, _clientIntroReleaseUtcTicks))
+            || (_clientBattleGateActive && !IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseLocalAt, _clientBattleReleaseUtcTicks));
         public static float LastHostReleaseDelaySeconds => _hostReleaseDelaySeconds;
 
         public static void BeginHostLevelLoad(Levels level)
@@ -119,18 +122,21 @@ namespace CupheadOnline.Sync
             _clientLevel = level;
             _clientGateStartedAt = Time.unscaledTime;
             _clientReleaseUtcTicks = 0L;
+            _clientReleaseLocalAt = 0f;
             _clientIntroGateActive = false;
             _clientIntroGateComplete = false;
             _clientIntroReadySent = false;
             _clientIntroReleaseReceived = false;
             _clientIntroGateStartedAt = 0f;
             _clientIntroReleaseUtcTicks = 0L;
+            _clientIntroReleaseLocalAt = 0f;
             _clientBattleGateActive = false;
             _clientBattleGateComplete = false;
             _clientBattleReadySent = false;
             _clientBattleReleaseReceived = false;
             _clientBattleGateStartedAt = 0f;
             _clientBattleReleaseUtcTicks = 0L;
+            _clientBattleReleaseLocalAt = 0f;
             _clientPendingBattleIntro = null;
             _clientStartHeldLogged = false;
             _lastLogAt = -100f;
@@ -153,7 +159,7 @@ namespace CupheadOnline.Sync
             Plugin.Log.LogInfo("[LevelStartSync] Guest loaded " + _hostLevel + ".");
         }
 
-        public static void HandleRemoteLevelStartRelease(ushort levelToken, long releaseUtcTicks)
+        public static void HandleRemoteLevelStartRelease(ushort levelToken, long releaseUtcTicks, float clientWaitSeconds)
         {
             if (MultiplayerSession.IsHost || !_clientGateActive)
                 return;
@@ -166,7 +172,8 @@ namespace CupheadOnline.Sync
 
             _clientReleaseReceived = true;
             _clientReleaseUtcTicks = releaseUtcTicks;
-            Plugin.Log.LogInfo("[LevelStartSync] Host released level start for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks) + ".");
+            _clientReleaseLocalAt = LocalReleaseAtFromClientWait(clientWaitSeconds);
+            Plugin.Log.LogInfo("[LevelStartSync] Host released level start for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks, clientWaitSeconds) + ".");
         }
 
         public static void HandleRemoteLevelIntroReady(ushort levelToken)
@@ -189,7 +196,7 @@ namespace CupheadOnline.Sync
             Plugin.Log.LogInfo("[LevelStartSync] Guest reached pre-intro start gate for " + _hostLevel + ".");
         }
 
-        public static void HandleRemoteLevelIntroRelease(ushort levelToken, long releaseUtcTicks)
+        public static void HandleRemoteLevelIntroRelease(ushort levelToken, long releaseUtcTicks, float clientWaitSeconds)
         {
             if (MultiplayerSession.IsHost || _clientIntroGateComplete)
                 return;
@@ -202,7 +209,8 @@ namespace CupheadOnline.Sync
 
             _clientIntroReleaseReceived = true;
             _clientIntroReleaseUtcTicks = releaseUtcTicks;
-            Plugin.Log.LogInfo("[LevelStartSync] Host released pre-intro start gate for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks) + ".");
+            _clientIntroReleaseLocalAt = LocalReleaseAtFromClientWait(clientWaitSeconds);
+            Plugin.Log.LogInfo("[LevelStartSync] Host released pre-intro start gate for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks, clientWaitSeconds) + ".");
         }
 
         public static void HandleRemoteLevelBattleReady(ushort levelToken)
@@ -220,7 +228,7 @@ namespace CupheadOnline.Sync
             Plugin.Log.LogInfo("[LevelStartSync] Guest reached first playable battle frame for " + _hostLevel + ".");
         }
 
-        public static void HandleRemoteLevelBattleRelease(ushort levelToken, long releaseUtcTicks)
+        public static void HandleRemoteLevelBattleRelease(ushort levelToken, long releaseUtcTicks, float clientWaitSeconds)
         {
             if (MultiplayerSession.IsHost || _clientBattleGateComplete)
                 return;
@@ -233,7 +241,8 @@ namespace CupheadOnline.Sync
 
             _clientBattleReleaseReceived = true;
             _clientBattleReleaseUtcTicks = releaseUtcTicks;
-            Plugin.Log.LogInfo("[LevelStartSync] Host released first playable battle frame for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks) + ".");
+            _clientBattleReleaseLocalAt = LocalReleaseAtFromClientWait(clientWaitSeconds);
+            Plugin.Log.LogInfo("[LevelStartSync] Host released first playable battle frame for " + _clientLevel + ReleaseTargetSuffix(releaseUtcTicks, clientWaitSeconds) + ".");
         }
 
         public static void NotifyLocalTransitionInComplete(Level level)
@@ -428,7 +437,7 @@ namespace CupheadOnline.Sync
                 if (Time.unscaledTime >= _hostLocalReleaseAt)
                 {
                     _hostGateActive = false;
-                    ReleaseLocal("host-latency-aligned", _hostReleaseUtcTicks);
+                    ReleaseLocal("host-latency-aligned", _hostLocalReleaseAt, _hostReleaseUtcTicks);
                     return;
                 }
 
@@ -468,10 +477,10 @@ namespace CupheadOnline.Sync
                 HoldLevelStart("client");
             }
 
-            if (IsReleaseDue(_clientReleaseReceived, _clientReleaseUtcTicks))
+            if (IsReleaseDue(_clientReleaseReceived, _clientReleaseLocalAt, _clientReleaseUtcTicks))
             {
                 _clientGateActive = false;
-                ReleaseLocal("client", _clientReleaseUtcTicks);
+                ReleaseLocal("client", _clientReleaseLocalAt, _clientReleaseUtcTicks);
                 return;
             }
 
@@ -479,7 +488,7 @@ namespace CupheadOnline.Sync
             {
                 Plugin.Log.LogWarning("[LevelStartSync] Host release did not arrive before timeout; releasing client.");
                 _clientGateActive = false;
-                ReleaseLocal("client-timeout", 0L);
+                ReleaseLocal("client-timeout", 0f, 0L);
             }
             else
             {
@@ -507,7 +516,11 @@ namespace CupheadOnline.Sync
                     _hostReleaseDelaySeconds = EstimateOneWayReleaseDelaySeconds();
                     _hostIntroLocalReleaseAt = Time.unscaledTime + _hostReleaseDelaySeconds;
                     _hostIntroReleaseUtcTicks = UtcTicksAfterSeconds(_hostReleaseDelaySeconds);
-                    SendSignal(SessionSignalKind.LevelIntroRelease, ToToken(_hostLevel), _hostIntroReleaseUtcTicks);
+                    SendSignal(
+                        SessionSignalKind.LevelIntroRelease,
+                        ToToken(_hostLevel),
+                        _hostIntroReleaseUtcTicks,
+                        EstimateClientReceiptWaitSeconds(_hostReleaseDelaySeconds));
                     Plugin.Log.LogInfo("[LevelStartSync] Released pre-intro start gate for "
                         + _hostLevel
                         + "; delaying host local intro release by "
@@ -532,7 +545,7 @@ namespace CupheadOnline.Sync
 
             _hostIntroGateActive = false;
             _hostIntroGateComplete = true;
-            ReleaseLocal("host-intro-latency-aligned", _hostIntroReleaseUtcTicks);
+            ReleaseLocal("host-intro-latency-aligned", _hostIntroLocalReleaseAt, _hostIntroReleaseUtcTicks);
         }
 
         static void UpdateClientIntroStart()
@@ -544,11 +557,11 @@ namespace CupheadOnline.Sync
 
             HoldLevelStart("client-intro");
 
-            if (IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseUtcTicks))
+            if (IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseLocalAt, _clientIntroReleaseUtcTicks))
             {
                 _clientIntroGateActive = false;
                 _clientIntroGateComplete = true;
-                ReleaseLocal("client-intro", _clientIntroReleaseUtcTicks);
+                ReleaseLocal("client-intro", _clientIntroReleaseLocalAt, _clientIntroReleaseUtcTicks);
                 return;
             }
 
@@ -557,7 +570,7 @@ namespace CupheadOnline.Sync
                 Plugin.Log.LogWarning("[LevelStartSync] Host intro release did not arrive before timeout; releasing client.");
                 _clientIntroGateActive = false;
                 _clientIntroGateComplete = true;
-                ReleaseLocal("client-intro-timeout", 0L);
+                ReleaseLocal("client-intro-timeout", 0f, 0L);
             }
             else
             {
@@ -585,7 +598,11 @@ namespace CupheadOnline.Sync
                     _hostReleaseDelaySeconds = EstimateOneWayReleaseDelaySeconds();
                     _hostBattleLocalReleaseAt = Time.unscaledTime + _hostReleaseDelaySeconds;
                     _hostBattleReleaseUtcTicks = UtcTicksAfterSeconds(_hostReleaseDelaySeconds);
-                    SendSignal(SessionSignalKind.LevelBattleRelease, ToToken(_hostLevel), _hostBattleReleaseUtcTicks);
+                    SendSignal(
+                        SessionSignalKind.LevelBattleRelease,
+                        ToToken(_hostLevel),
+                        _hostBattleReleaseUtcTicks,
+                        EstimateClientReceiptWaitSeconds(_hostReleaseDelaySeconds));
                     Plugin.Log.LogInfo("[LevelStartSync] Released first playable battle frame for "
                         + _hostLevel
                         + "; delaying host local battle release by "
@@ -619,7 +636,7 @@ namespace CupheadOnline.Sync
             _hostPendingBattleIntro = null;
             _hostBattleGateActive = false;
             _hostBattleGateComplete = true;
-            ReleaseLocal(role, _hostBattleReleaseUtcTicks);
+            ReleaseLocal(role, _hostBattleLocalReleaseAt, _hostBattleReleaseUtcTicks);
         }
 
         static void UpdateClientBattleStart()
@@ -631,7 +648,7 @@ namespace CupheadOnline.Sync
 
             HoldLevelStart("client-battle");
 
-            if (IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseUtcTicks))
+            if (IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseLocalAt, _clientBattleReleaseUtcTicks))
             {
                 CompleteClientBattleIntroGate("client-battle");
                 return;
@@ -656,7 +673,7 @@ namespace CupheadOnline.Sync
             _clientPendingBattleIntro = null;
             _clientBattleGateActive = false;
             _clientBattleGateComplete = true;
-            ReleaseLocal(role, _clientBattleReleaseUtcTicks);
+            ReleaseLocal(role, _clientBattleReleaseLocalAt, _clientBattleReleaseUtcTicks);
         }
 
         static void SendClientLoadedIfNeeded()
@@ -677,7 +694,11 @@ namespace CupheadOnline.Sync
                 _hostReleaseDelaySeconds = EstimateOneWayReleaseDelaySeconds();
                 _hostLocalReleaseAt = Time.unscaledTime + _hostReleaseDelaySeconds;
                 _hostReleaseUtcTicks = UtcTicksAfterSeconds(_hostReleaseDelaySeconds);
-                SendSignal(SessionSignalKind.LevelStartRelease, ToToken(_hostLevel), _hostReleaseUtcTicks);
+                SendSignal(
+                    SessionSignalKind.LevelStartRelease,
+                    ToToken(_hostLevel),
+                    _hostReleaseUtcTicks,
+                    EstimateClientReceiptWaitSeconds(_hostReleaseDelaySeconds));
                 Plugin.Log.LogInfo("[LevelStartSync] Released level start for "
                     + _hostLevel
                     + "; delaying host local release by "
@@ -688,7 +709,7 @@ namespace CupheadOnline.Sync
             if (_hostReleaseDelaySeconds <= 0.001f)
             {
                 _hostGateActive = false;
-                ReleaseLocal("host", _hostReleaseUtcTicks);
+                ReleaseLocal("host", _hostLocalReleaseAt, _hostReleaseUtcTicks);
             }
         }
 
@@ -704,7 +725,7 @@ namespace CupheadOnline.Sync
             _holdingTimeScale = true;
         }
 
-        static void ReleaseLocal(string role, long releaseUtcTicks)
+        static void ReleaseLocal(string role, float releaseLocalAt, long releaseUtcTicks)
         {
             if (HasActiveLocalHold())
             {
@@ -719,7 +740,7 @@ namespace CupheadOnline.Sync
                 CupheadTime.SetAll(1f);
             }
             _holdingTimeScale = false;
-            HighLatencyInputSync.NotifyLevelStartReleased(releaseUtcTicks);
+            HighLatencyInputSync.NotifyLevelStartReleased(GetLocalReleaseElapsed(releaseLocalAt, releaseUtcTicks));
             Plugin.Log.LogInfo("[LevelStartSync] Local level start gate released on " + role + ".");
         }
 
@@ -732,9 +753,9 @@ namespace CupheadOnline.Sync
                     || (_hostBattleGateActive && !_hostBattleGateComplete);
             }
 
-            return (_clientGateActive && !IsReleaseDue(_clientReleaseReceived, _clientReleaseUtcTicks))
-                || (_clientIntroGateActive && !IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseUtcTicks))
-                || (_clientBattleGateActive && !IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseUtcTicks));
+            return (_clientGateActive && !IsReleaseDue(_clientReleaseReceived, _clientReleaseLocalAt, _clientReleaseUtcTicks))
+                || (_clientIntroGateActive && !IsReleaseDue(_clientIntroReleaseReceived, _clientIntroReleaseLocalAt, _clientIntroReleaseUtcTicks))
+                || (_clientBattleGateActive && !IsReleaseDue(_clientBattleReleaseReceived, _clientBattleReleaseLocalAt, _clientBattleReleaseUtcTicks));
         }
 
         static void PrepareDeterministicBattleStart(Levels level, string role)
@@ -781,13 +802,16 @@ namespace CupheadOnline.Sync
             _clientIntroReadySent = false;
             _clientIntroReleaseReceived = false;
             _clientIntroReleaseUtcTicks = 0L;
+            _clientIntroReleaseLocalAt = 0f;
             _clientBattleGateActive = false;
             _clientBattleGateComplete = false;
             _clientBattleReadySent = false;
             _clientBattleReleaseReceived = false;
             _clientBattleReleaseUtcTicks = 0L;
+            _clientBattleReleaseLocalAt = 0f;
             _clientPendingBattleIntro = null;
             _clientReleaseUtcTicks = 0L;
+            _clientReleaseLocalAt = 0f;
             _hostStartHeldLogged = false;
             _clientStartHeldLogged = false;
             _lastHostWaitingRecoveryAt = -1f;
@@ -807,10 +831,10 @@ namespace CupheadOnline.Sync
 
         static void SendSignal(SessionSignalKind kind, ushort levelToken)
         {
-            SendSignal(kind, levelToken, 0L);
+            SendSignal(kind, levelToken, 0L, -1f);
         }
 
-        static void SendSignal(SessionSignalKind kind, ushort levelToken, long releaseUtcTicks)
+        static void SendSignal(SessionSignalKind kind, ushort levelToken, long releaseUtcTicks, float clientWaitSeconds)
         {
             if (Plugin.Net == null || !Plugin.Net.IsConnected)
                 return;
@@ -819,6 +843,7 @@ namespace CupheadOnline.Sync
             {
                 Signal = (byte)kind,
                 SaveRevision = levelToken,
+                HostBattleElapsed = clientWaitSeconds,
                 UtcReleaseTicks = releaseUtcTicks,
             };
             Plugin.Net.SendSessionSignal(ref pkt);
@@ -839,10 +864,12 @@ namespace CupheadOnline.Sync
             }
         }
 
-        static bool IsReleaseDue(bool received, long releaseUtcTicks)
+        static bool IsReleaseDue(bool received, float releaseLocalAt, long releaseUtcTicks)
         {
             if (!received)
                 return false;
+            if (releaseLocalAt > 0f)
+                return Time.unscaledTime >= releaseLocalAt;
             if (releaseUtcTicks <= 0L)
                 return true;
 
@@ -855,6 +882,40 @@ namespace CupheadOnline.Sync
             return deltaTicks <= 0L;
         }
 
+        static float LocalReleaseAtFromClientWait(float clientWaitSeconds)
+        {
+            if (clientWaitSeconds >= 0f && clientWaitSeconds <= 2.5f)
+                return Time.unscaledTime + clientWaitSeconds;
+
+            return 0f;
+        }
+
+        static float EstimateClientReceiptWaitSeconds(float hostReleaseDelaySeconds)
+        {
+            float oneWay = 0f;
+            if (Plugin.Net != null && Plugin.Net.Latency > 0)
+                oneWay = Mathf.Max(oneWay, Plugin.Net.Latency * 0.0005f);
+            if (Plugin.LanArtificialLatencyMs > 0)
+                oneWay = Mathf.Max(oneWay, Plugin.LanArtificialLatencyMs / 1000f);
+
+            return Mathf.Clamp(hostReleaseDelaySeconds - oneWay, 0f, 2.5f);
+        }
+
+        static float GetLocalReleaseElapsed(float releaseLocalAt, long releaseUtcTicks)
+        {
+            if (releaseLocalAt > 0f)
+                return Mathf.Max(0f, Time.unscaledTime - releaseLocalAt);
+
+            if (releaseUtcTicks > 0L)
+            {
+                double elapsed = (DateTime.UtcNow.Ticks - releaseUtcTicks) / (double)TimeSpan.TicksPerSecond;
+                if (elapsed >= -0.25 && elapsed <= 0.75)
+                    return Mathf.Max(0f, (float)elapsed);
+            }
+
+            return 0f;
+        }
+
         static string ReleaseTargetSuffix(long releaseUtcTicks)
         {
             if (releaseUtcTicks <= 0L)
@@ -862,6 +923,16 @@ namespace CupheadOnline.Sync
 
             double remainingMs = (releaseUtcTicks - DateTime.UtcNow.Ticks) / 10000.0;
             return " with synchronized release target in " + Mathf.Max(0f, (float)(remainingMs / 1000.0)).ToString("0.000") + "s.";
+        }
+
+        static string ReleaseTargetSuffix(long releaseUtcTicks, float clientWaitSeconds)
+        {
+            if (clientWaitSeconds >= 0f && clientWaitSeconds <= 2.5f)
+                return " with synchronized release target in "
+                    + clientWaitSeconds.ToString("0.000")
+                    + "s after receipt.";
+
+            return ReleaseTargetSuffix(releaseUtcTicks);
         }
 
         public static float EstimateOneWayReleaseDelaySeconds()

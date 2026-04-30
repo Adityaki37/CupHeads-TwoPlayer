@@ -53,6 +53,7 @@ namespace CupheadOnline.Sync
         const float DeathHeartParryOffsetToleranceSeconds = 0.03f;
         const float BuiltInAnimCompleteFallbackSeconds = 0.035f;
         const float BuiltInReviveCorrectionSeconds = 5.0f;
+        const float BuiltInRevivePostSettleDeathSuppressSeconds = 2.0f;
         const float ScheduledParryLeadMinSeconds = 0.05f;
         const float ScheduledParryLeadMaxSeconds = 1.5f;
         const float BuiltInFinalStatusMinSettleSeconds = 0.45f;
@@ -67,6 +68,8 @@ namespace CupheadOnline.Sync
         static readonly HashSet<int> HostAuthorizedBuiltInParryEffects =
             new HashSet<int>();
         static readonly HashSet<int> SuppressedClientLocalBuiltInParrySwitches =
+            new HashSet<int>();
+        static readonly HashSet<int> SuppressedClientRemoteBuiltInParrySwitches =
             new HashSet<int>();
         static readonly HashSet<int> HostScheduledBuiltInParryEffects =
             new HashSet<int>();
@@ -96,6 +99,8 @@ namespace CupheadOnline.Sync
             new Dictionary<PlayerId, Vector2>();
         static readonly Dictionary<PlayerId, float> RecentBuiltInRevives =
             new Dictionary<PlayerId, float>();
+        static readonly Dictionary<PlayerId, float> RecentBuiltInReviveDeathSuppressions =
+            new Dictionary<PlayerId, float>();
         static readonly Dictionary<PlayerId, float> RecentBuiltInReviveInputUnlocks =
             new Dictionary<PlayerId, float>();
         static readonly Dictionary<PlayerId, uint> PendingBuiltInFinalStatusTicks =
@@ -119,6 +124,7 @@ namespace CupheadOnline.Sync
             BroadcastedBuiltInVisuals.Clear();
             HostAuthorizedBuiltInParryEffects.Clear();
             SuppressedClientLocalBuiltInParrySwitches.Clear();
+            SuppressedClientRemoteBuiltInParrySwitches.Clear();
             HostScheduledBuiltInParryEffects.Clear();
             HostExecutingScheduledBuiltInParryEffects.Clear();
             HostBuiltInAnimCompletionFallbacks.Clear();
@@ -134,6 +140,7 @@ namespace CupheadOnline.Sync
             PendingHostBuiltInRevivePositions.Clear();
             PendingBuiltInFinalStatusTicks.Clear();
             RecentBuiltInRevives.Clear();
+            RecentBuiltInReviveDeathSuppressions.Clear();
             RecentBuiltInReviveInputUnlocks.Clear();
             _revivePauseCatchUpUntil = -1f;
             _revivePauseCatchUpActive = false;
@@ -650,6 +657,17 @@ namespace CupheadOnline.Sync
             int effectId = effect.GetInstanceID();
             if (HostAuthorizedBuiltInParryEffects.Contains(effectId))
                 return false;
+            if (HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers())
+            {
+                if (SuppressedClientRemoteBuiltInParrySwitches.Add(effectId))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Suppressed early client-local parry visual on remote-owned "
+                        + targetPlayerId
+                        + " death heart; waiting for host-timed revive visual.");
+                }
+                return true;
+            }
             if (ClientRemoteBuiltInParryStartedAt.ContainsKey(effectId))
                 return true;
 
@@ -886,8 +904,7 @@ namespace CupheadOnline.Sync
             try
             {
                 PlayerDeathEffectOnReviveParryAnimCompleteMethod.Invoke(effect, null);
-                RecentBuiltInRevives[targetPlayerId] =
-                    Time.unscaledTime + BuiltInReviveCorrectionSeconds;
+                MarkRecentBuiltInRevive(targetPlayerId);
                 CompleteAuthoritativeClientBuiltInReviveIfNeeded(effect, targetPlayerId);
                 Plugin.Log.LogInfo(
                     "[ReviveSync] Completed client built-in revive animation after host-authorized visual for "
@@ -952,6 +969,32 @@ namespace CupheadOnline.Sync
             return false;
         }
 
+        static void MarkRecentBuiltInRevive(PlayerId playerId)
+        {
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            float until = Time.unscaledTime + BuiltInReviveCorrectionSeconds;
+            RecentBuiltInRevives[playerId] = until;
+            RecentBuiltInReviveDeathSuppressions[playerId] = until;
+        }
+
+        static void ExtendRecentBuiltInReviveDeathSuppression(PlayerId playerId, float seconds)
+        {
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            float until = Time.unscaledTime + Mathf.Max(0f, seconds);
+            float existing;
+            if (RecentBuiltInReviveDeathSuppressions.TryGetValue(playerId, out existing)
+             && existing > until)
+            {
+                return;
+            }
+
+            RecentBuiltInReviveDeathSuppressions[playerId] = until;
+        }
+
         public static void CancelRecentBuiltInReviveCorrection(PlayerId playerId, string reason = "after local gameplay input")
         {
             if (playerId > PlayerId.PlayerTwo)
@@ -961,6 +1004,7 @@ namespace CupheadOnline.Sync
                 return;
 
             RecentBuiltInReviveInputUnlocks[playerId] = Time.unscaledTime + 2f;
+            ExtendRecentBuiltInReviveDeathSuppression(playerId, BuiltInRevivePostSettleDeathSuppressSeconds);
             ReleaseBuiltInReviveMotorForImmediateControl(GetPlayerSafe(playerId) as LevelPlayerController);
 
             if (Plugin.AutoRunLanSteamE2E)
@@ -1346,11 +1390,12 @@ namespace CupheadOnline.Sync
             if (player.stats != null && player.stats.Health <= 0)
                 player.stats.SetHealth(Mathf.Max(1, player.stats.HealthMax));
 
-            RecentBuiltInRevives[playerId] =
-                Time.unscaledTime + BuiltInReviveCorrectionSeconds;
+            RecentBuiltInRevives.Remove(playerId);
+            RecentBuiltInReviveInputUnlocks[playerId] = Time.unscaledTime + BuiltInRevivePostSettleDeathSuppressSeconds;
+            ExtendRecentBuiltInReviveDeathSuppression(playerId, BuiltInRevivePostSettleDeathSuppressSeconds);
 
             Plugin.Log.LogInfo(
-                "[ReviveSync] Snapped recently revived "
+                "[ReviveSync] Settled recently revived "
                 + playerId
                 + " to host final revive status at ("
                 + pkt.PosX.ToString("0.00")
@@ -1379,11 +1424,11 @@ namespace CupheadOnline.Sync
 
             var playerId = (PlayerId)pkt.ParticipantId;
             float suppressUntil;
-            if (!RecentBuiltInRevives.TryGetValue(playerId, out suppressUntil))
+            if (!RecentBuiltInReviveDeathSuppressions.TryGetValue(playerId, out suppressUntil))
                 return false;
             if (Time.unscaledTime > suppressUntil)
             {
-                RecentBuiltInRevives.Remove(playerId);
+                RecentBuiltInReviveDeathSuppressions.Remove(playerId);
                 return false;
             }
 
@@ -1659,8 +1704,7 @@ namespace CupheadOnline.Sync
             if (deathEffect != null)
                 UnityEngine.Object.Destroy(deathEffect.gameObject);
 
-            RecentBuiltInRevives[localPlayerId] =
-                Time.unscaledTime + BuiltInReviveCorrectionSeconds;
+            MarkRecentBuiltInRevive(localPlayerId);
 
             bool deferBuiltInStatus = IsHostBuiltInReviveStatusSuppressed()
                 && MultiplayerSession.IsHost
@@ -1692,7 +1736,7 @@ namespace CupheadOnline.Sync
                     continue;
                 }
 
-                ReleaseBuiltInReviveMotorForImmediateControl(GetPlayerSafe(entry.Key) as LevelPlayerController);
+                KeepBuiltInReviveMotorInputUnlocked(GetPlayerSafe(entry.Key) as LevelPlayerController);
             }
 
             for (int i = 0; i < expired.Count; i++)
@@ -1745,6 +1789,28 @@ namespace CupheadOnline.Sync
 
             TrySetNestedMotorEnum(player.motor, "parryManager", "state", 0);
             TrySetNestedMotorEnum(player.motor, "superManager", "state", 0);
+        }
+
+        static void KeepBuiltInReviveMotorInputUnlocked(LevelPlayerController player)
+        {
+            if (player == null || player.motor == null)
+                return;
+
+            try { player.EnableInput(); }
+            catch { }
+
+            try
+            {
+                var motor = Traverse.Create(player.motor);
+                motor.Property("Locked").SetValue(false);
+                motor.Field("allowInput").SetValue(true);
+                motor.Field("allowJumping").SetValue(true);
+                motor.Field("allowFalling").SetValue(true);
+                motor.Field("forceLaunchUp").SetValue(false);
+            }
+            catch
+            {
+            }
         }
 
         static void TrySetNestedMotorEnum(LevelPlayerMotor motor, string ownerFieldName, string fieldName, int value)

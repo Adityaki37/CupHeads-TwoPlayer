@@ -200,7 +200,9 @@ namespace CupheadOnline.Sync
         static float _clientReverseReviveMotorJumpObservedAt;
         static float _clientReverseReviveMotorParryObservedAt;
         static long _clientReviveStartUtcTicks;
+        static float _clientReviveStartLocalAt;
         static long _clientReverseReviveStartUtcTicks;
+        static float _clientReverseReviveStartLocalAt;
         static float _hostReviveDeathAt;
         static float _hostReviveDeathClock;
         static float _hostReviveStartAt;
@@ -236,6 +238,7 @@ namespace CupheadOnline.Sync
         static float _clientFightDamageStartedAt;
         static float _hostSynchronizedFightInputStartAt;
         static long _clientSynchronizedFightInputStartUtcTicks;
+        static float _clientSynchronizedFightInputStartLocalAt;
         static int _hostRetryStartRetries;
         static bool _hasFightStartBossHealth;
         static string _fightStartBossName = string.Empty;
@@ -409,8 +412,9 @@ namespace CupheadOnline.Sync
                     {
                         _clientReviveTestStartSignalReceived = true;
                         _clientReviveStartUtcTicks = pkt.UtcReleaseTicks;
+                        _clientReviveStartLocalAt = LocalReleaseAtFromSignal(pkt);
                         Log("Received host built-in death/parry revive smoke start"
-                            + ReleaseTargetSuffix(pkt.UtcReleaseTicks)
+                            + ReleaseTargetSuffix(pkt)
                             + ".");
                     }
                     return true;
@@ -426,8 +430,9 @@ namespace CupheadOnline.Sync
                     {
                         _clientReverseReviveTestStartSignalReceived = true;
                         _clientReverseReviveStartUtcTicks = pkt.UtcReleaseTicks;
+                        _clientReverseReviveStartLocalAt = LocalReleaseAtFromSignal(pkt);
                         Log("Received host reverse built-in death/parry revive smoke start"
-                            + ReleaseTargetSuffix(pkt.UtcReleaseTicks)
+                            + ReleaseTargetSuffix(pkt)
                             + ".");
                     }
                     return true;
@@ -490,9 +495,10 @@ namespace CupheadOnline.Sync
                         ResetPauseSyncSmokeFlags();
                         _clientFightDamageStartSignalReceived = true;
                         _clientSynchronizedFightInputStartUtcTicks = pkt.UtcReleaseTicks;
+                        _clientSynchronizedFightInputStartLocalAt = LocalReleaseAtFromSignal(pkt);
                         _clientFightDamageStartedAt = 0f;
                         Log("Received host fight damage-window start"
-                            + ReleaseTargetSuffix(pkt.UtcReleaseTicks)
+                            + ReleaseTargetSuffix(pkt)
                             + ".");
                     }
                     return true;
@@ -1783,7 +1789,8 @@ namespace CupheadOnline.Sync
             _hostFightDamageStartSignalSent = true;
             SendDialogueObservedSignal(
                 SessionSignalKind.LanSteamE2EFightDamageStarted,
-                UtcTicksAfterSeconds(delay));
+                UtcTicksAfterSeconds(delay),
+                BattleClockAfterSeconds(delay));
             Log(reason
                 + " after "
                 + Mathf.Max(0f, delay).ToString("0.000")
@@ -1826,8 +1833,9 @@ namespace CupheadOnline.Sync
         {
             if (!_clientFightDamageStartSignalReceived)
                 return false;
-            if (_clientSynchronizedFightInputStartUtcTicks > 0L
-             && !IsUtcReleaseDue(_clientSynchronizedFightInputStartUtcTicks))
+            if (!IsSignalReleaseDue(
+                _clientSynchronizedFightInputStartLocalAt,
+                _clientSynchronizedFightInputStartUtcTicks))
                 return false;
 
             if (_clientFightDamageStartedAt <= 0f)
@@ -2023,16 +2031,17 @@ namespace CupheadOnline.Sync
             {
                 Signal = (byte)SessionSignalKind.LanSteamE2ECheckpoint,
                 SaveRevision = 0,
+                HostBattleElapsed = -1f,
             };
             Plugin.Net.SendSessionSignal(ref pkt);
         }
 
         static void SendDialogueObservedSignal(SessionSignalKind kind)
         {
-            SendDialogueObservedSignal(kind, 0L);
+            SendDialogueObservedSignal(kind, 0L, -1f);
         }
 
-        static void SendDialogueObservedSignal(SessionSignalKind kind, long utcReleaseTicks)
+        static void SendDialogueObservedSignal(SessionSignalKind kind, long utcReleaseTicks, float hostBattleClock)
         {
             if (Plugin.Net == null || !Plugin.Net.IsConnected)
                 return;
@@ -2041,6 +2050,7 @@ namespace CupheadOnline.Sync
             {
                 Signal = (byte)kind,
                 SaveRevision = 0,
+                HostBattleElapsed = hostBattleClock,
                 UtcReleaseTicks = utcReleaseTicks,
             };
             Plugin.Net.SendSessionSignal(ref pkt);
@@ -2072,6 +2082,47 @@ namespace CupheadOnline.Sync
                 return true;
 
             return deltaTicks <= 0L;
+        }
+
+        static bool IsSignalReleaseDue(float releaseLocalAt, long utcTicks)
+        {
+            if (releaseLocalAt > 0f)
+                return Time.unscaledTime >= releaseLocalAt;
+
+            return IsUtcReleaseDue(utcTicks);
+        }
+
+        static float LocalReleaseAtFromSignal(SessionSignalPacket pkt)
+        {
+            if (pkt.HostBattleElapsed >= 0f)
+            {
+                float now = HighLatencyInputSync.PlayoutTimeNow();
+                if (now >= 0f)
+                    return Time.unscaledTime + Mathf.Clamp(pkt.HostBattleElapsed - now, 0f, 2.5f);
+            }
+
+            return 0f;
+        }
+
+        static float BattleClockAfterSeconds(float seconds)
+        {
+            float now = HighLatencyInputSync.PacketTimeNow();
+            if (now < 0f)
+                return -1f;
+
+            return now + Mathf.Max(0f, seconds);
+        }
+
+        static string ReleaseTargetSuffix(SessionSignalPacket pkt)
+        {
+            if (pkt.HostBattleElapsed >= 0f)
+            {
+                return " with synchronized battle-clock target "
+                    + pkt.HostBattleElapsed.ToString("0.000")
+                    + "s";
+            }
+
+            return ReleaseTargetSuffix(pkt.UtcReleaseTicks);
         }
 
         static string ReleaseTargetSuffix(long utcTicks)
@@ -3191,7 +3242,8 @@ namespace CupheadOnline.Sync
                 _hostReviveStartAt = Time.unscaledTime + delay;
                 SendDialogueObservedSignal(
                     SessionSignalKind.LanSteamE2EReviveTestStarted,
-                    UtcTicksAfterSeconds(delay));
+                    UtcTicksAfterSeconds(delay),
+                    BattleClockAfterSeconds(delay));
                 Log("Starting built-in death/parry revive smoke after "
                     + Mathf.Max(0f, _hostReviveStartAt - Time.unscaledTime).ToString("0.000")
                     + "s latency alignment; client will put local Player Two into the same dead state.");
@@ -3306,7 +3358,8 @@ namespace CupheadOnline.Sync
                 _hostReverseReviveStartAt = Time.unscaledTime + delay;
                 SendDialogueObservedSignal(
                     SessionSignalKind.LanSteamE2EReverseReviveTestStarted,
-                    UtcTicksAfterSeconds(delay));
+                    UtcTicksAfterSeconds(delay),
+                    BattleClockAfterSeconds(delay));
                 Log("Starting reverse built-in death/parry revive smoke after "
                     + Mathf.Max(0f, _hostReverseReviveStartAt - Time.unscaledTime).ToString("0.000")
                     + "s latency alignment; client will put local Player One into the same dead state and drive Player Two jump/parry.");
@@ -3426,8 +3479,7 @@ namespace CupheadOnline.Sync
 
             if (!_clientReviveDeathForced)
             {
-                if (_clientReviveStartUtcTicks > 0L
-                 && !IsUtcReleaseDue(_clientReviveStartUtcTicks))
+                if (!IsSignalReleaseDue(_clientReviveStartLocalAt, _clientReviveStartUtcTicks))
                 {
                     return;
                 }
@@ -3502,8 +3554,7 @@ namespace CupheadOnline.Sync
 
             if (!_clientReverseReviveDeathForced)
             {
-                if (_clientReverseReviveStartUtcTicks > 0L
-                 && !IsUtcReleaseDue(_clientReverseReviveStartUtcTicks))
+                if (!IsSignalReleaseDue(_clientReverseReviveStartLocalAt, _clientReverseReviveStartUtcTicks))
                 {
                     return;
                 }

@@ -95,17 +95,9 @@ namespace CupheadOnline.Sync
             _localStates.Remove((byte)playerId);
         }
 
-        public static void NotifyLevelStartReleased(long releaseUtcTicks)
+        public static void NotifyLevelStartReleased(float elapsedSinceSharedRelease)
         {
-            float elapsedSinceSharedRelease = 0f;
-            if (releaseUtcTicks > 0L)
-            {
-                double elapsed = (DateTime.UtcNow.Ticks - releaseUtcTicks) / (double)TimeSpan.TicksPerSecond;
-                if (elapsed >= -0.25 && elapsed <= 0.75)
-                    elapsedSinceSharedRelease = Mathf.Max(0f, (float)elapsed);
-            }
-
-            _levelClockStartedAt = Time.unscaledTime - elapsedSinceSharedRelease;
+            _levelClockStartedAt = Time.unscaledTime - Mathf.Clamp(elapsedSinceSharedRelease, 0f, 0.75f);
             _localStates.Clear();
             ResetRemoteBuiltInInputs();
             LogModeIfNeeded(true);
