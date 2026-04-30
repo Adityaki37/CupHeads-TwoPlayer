@@ -10,6 +10,18 @@ namespace CupheadOnline.Sync
 {
     public static class ParticipantReviveController
     {
+        sealed class ScheduledHostBuiltInParry
+        {
+            public PlayerDeathEffect Effect;
+            public float ExecuteAt;
+        }
+
+        sealed class ScheduledClientBuiltInParry
+        {
+            public ReviveVisualPacket Packet;
+            public long Key;
+        }
+
         static readonly BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
 
@@ -25,6 +37,8 @@ namespace CupheadOnline.Sync
             typeof(ParrySwitch).GetMethod("OnParryPostPause", AnyInstance);
         static readonly MethodInfo PlayerDeathEffectOnParrySwitchMethod =
             AccessTools.Method(typeof(PlayerDeathEffect), "OnParrySwitch");
+        static readonly MethodInfo PlayerDeathEffectOnReviveParryAnimCompleteMethod =
+            AccessTools.Method(typeof(PlayerDeathEffect), "OnReviveParryAnimComplete");
         static readonly MethodInfo PlayerStatsOnStatsDeathMethod =
             AccessTools.Method(typeof(PlayerStatsManager), "OnStatsDeath");
         static readonly MethodInfo LevelPlayerOnDeathMethod =
@@ -37,6 +51,13 @@ namespace CupheadOnline.Sync
         const float DeathHeartParryPauseSeconds = 0.185f;
         const float DeathHeartParryCatchUpCapSeconds = 0.3f;
         const float DeathHeartParryOffsetToleranceSeconds = 0.03f;
+        const float BuiltInAnimCompleteFallbackSeconds = 0.035f;
+        const float BuiltInReviveCorrectionSeconds = 5.0f;
+        const float BuiltInRevivePostSettleDeathSuppressSeconds = 2.0f;
+        const float ScheduledParryLeadMinSeconds = 0.05f;
+        const float ScheduledParryLeadMaxSeconds = 1.5f;
+        const float BuiltInFinalStatusMinSettleSeconds = 0.45f;
+        const float BuiltInFinalStatusMaxSettleSeconds = 1.25f;
 
         static readonly List<PlayerDeathEffect> ScratchDeathEffects =
             new List<PlayerDeathEffect>(4);
@@ -46,18 +67,52 @@ namespace CupheadOnline.Sync
             new HashSet<int>();
         static readonly HashSet<int> HostAuthorizedBuiltInParryEffects =
             new HashSet<int>();
+        static readonly HashSet<int> SuppressedClientLocalBuiltInParrySwitches =
+            new HashSet<int>();
+        static readonly HashSet<int> SuppressedClientRemoteBuiltInParrySwitches =
+            new HashSet<int>();
+        static readonly HashSet<int> HostScheduledBuiltInParryEffects =
+            new HashSet<int>();
+        static readonly HashSet<int> HostExecutingScheduledBuiltInParryEffects =
+            new HashSet<int>();
+        static readonly HashSet<int> HostBuiltInAnimCompletionFallbacks =
+            new HashSet<int>();
+        static readonly HashSet<int> ClientBuiltInAnimCompletionFallbacks =
+            new HashSet<int>();
+        static readonly HashSet<long> ClientScheduledBuiltInParryKeys =
+            new HashSet<long>();
+        static readonly Dictionary<int, ScheduledHostBuiltInParry> HostScheduledBuiltInParries =
+            new Dictionary<int, ScheduledHostBuiltInParry>();
+        static readonly Dictionary<long, ScheduledClientBuiltInParry> ClientScheduledBuiltInParries =
+            new Dictionary<long, ScheduledClientBuiltInParry>();
+        static readonly List<int> ScratchScheduledHostParryIds =
+            new List<int>(4);
+        static readonly List<long> ScratchScheduledClientParryKeys =
+            new List<long>(4);
         static readonly Dictionary<int, float> ClientRemoteBuiltInParryStartedAt =
             new Dictionary<int, float>();
         static readonly Dictionary<PlayerId, float> MirroredBuiltInParryVisualAt =
             new Dictionary<PlayerId, float>();
         static readonly Dictionary<PlayerId, uint> PendingHostBuiltInReviveTicks =
             new Dictionary<PlayerId, uint>();
+        static readonly Dictionary<PlayerId, Vector2> PendingHostBuiltInRevivePositions =
+            new Dictionary<PlayerId, Vector2>();
         static readonly Dictionary<PlayerId, float> RecentBuiltInRevives =
             new Dictionary<PlayerId, float>();
+        static readonly Dictionary<PlayerId, float> RecentBuiltInReviveDeathSuppressions =
+            new Dictionary<PlayerId, float>();
+        static readonly Dictionary<PlayerId, float> RecentBuiltInReviveInputUnlocks =
+            new Dictionary<PlayerId, float>();
+        static readonly Dictionary<PlayerId, uint> PendingBuiltInFinalStatusTicks =
+            new Dictionary<PlayerId, uint>();
         static readonly Dictionary<PlayerId, Dictionary<Renderer, bool>> SuppressedBuiltInBodyRenderers =
             new Dictionary<PlayerId, Dictionary<Renderer, bool>>();
+        static readonly Dictionary<PlayerId, List<Renderer>> LastVisibleBuiltInBodyRenderers =
+            new Dictionary<PlayerId, List<Renderer>>();
         static float _revivePauseCatchUpUntil = -1f;
         static bool _revivePauseCatchUpActive;
+        static bool _deferHostBuiltInReviveStatus;
+        static int _hostBuiltInReviveStatusSuppressDepth;
 
         static ParticipantReviveController()
         {
@@ -70,12 +125,53 @@ namespace CupheadOnline.Sync
             AppliedGrantKeys.Clear();
             BroadcastedBuiltInVisuals.Clear();
             HostAuthorizedBuiltInParryEffects.Clear();
+            SuppressedClientLocalBuiltInParrySwitches.Clear();
+            SuppressedClientRemoteBuiltInParrySwitches.Clear();
+            HostScheduledBuiltInParryEffects.Clear();
+            HostExecutingScheduledBuiltInParryEffects.Clear();
+            HostBuiltInAnimCompletionFallbacks.Clear();
+            ClientBuiltInAnimCompletionFallbacks.Clear();
+            ClientScheduledBuiltInParryKeys.Clear();
+            HostScheduledBuiltInParries.Clear();
+            ClientScheduledBuiltInParries.Clear();
+            ScratchScheduledHostParryIds.Clear();
+            ScratchScheduledClientParryKeys.Clear();
             ClientRemoteBuiltInParryStartedAt.Clear();
             MirroredBuiltInParryVisualAt.Clear();
             PendingHostBuiltInReviveTicks.Clear();
+            PendingHostBuiltInRevivePositions.Clear();
+            PendingBuiltInFinalStatusTicks.Clear();
             RecentBuiltInRevives.Clear();
+            RecentBuiltInReviveDeathSuppressions.Clear();
+            RecentBuiltInReviveInputUnlocks.Clear();
+            LastVisibleBuiltInBodyRenderers.Clear();
             _revivePauseCatchUpUntil = -1f;
             _revivePauseCatchUpActive = false;
+            _deferHostBuiltInReviveStatus = false;
+            _hostBuiltInReviveStatusSuppressDepth = 0;
+        }
+
+        public static void Update()
+        {
+            ExecuteDueHostBuiltInParries();
+            ExecuteDueClientBuiltInParries();
+            ApplyRecentReviveInputUnlocks();
+            RememberVisibleBuiltInBodyRenderers(GetPlayerSafe(PlayerId.PlayerOne) as LevelPlayerController);
+            RememberVisibleBuiltInBodyRenderers(GetPlayerSafe(PlayerId.PlayerTwo) as LevelPlayerController);
+        }
+
+        public static bool ShouldSuppressHostBuiltInImmediateReviveStatus(AbstractPlayerController player)
+        {
+            if (!MultiplayerSession.IsHost || player == null || player.id > PlayerId.PlayerTwo)
+                return false;
+
+            if (IsHostBuiltInReviveStatusSuppressed())
+                return true;
+
+            return PendingBuiltInFinalStatusTicks.ContainsKey(player.id)
+                && player.stats != null
+                && player.stats.Health > 0
+                && !player.IsDead;
         }
 
         public static bool TryOverrideReviveOutOfFrame(PlayerDeathEffect effect)
@@ -186,7 +282,81 @@ namespace CupheadOnline.Sync
             if (pkt.ApplyDonorCost)
                 ApplyLocalDonorCost(localPlayerId);
             if (pkt.ApplyRevive)
+            {
+                if (ShouldWaitForHostBuiltInReviveStatus(localPlayerId))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Deferred built-in revive grant for "
+                        + localPlayerId
+                        + "; waiting for host final revive status.");
+                    return;
+                }
+
                 ApplyLocalRevive(localPlayerId, new Vector2(pkt.RevivePosX, pkt.RevivePosY));
+            }
+        }
+
+        public static bool TryScheduleHostBuiltInParrySwitch(PlayerDeathEffect effect)
+        {
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsHost
+             || Plugin.Instance == null
+             || Plugin.Net == null
+             || !Plugin.Net.IsConnected
+             || effect == null
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
+             || PlayerDeathEffectOnParrySwitchMethod == null)
+            {
+                return false;
+            }
+
+            int effectId = effect.GetInstanceID();
+            if (HostExecutingScheduledBuiltInParryEffects.Contains(effectId))
+                return false;
+            if (HostScheduledBuiltInParryEffects.Contains(effectId))
+                return true;
+
+            ExtraParticipantDeathBubbleTag extraTag;
+            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
+                return false;
+
+            PlayerId targetPlayerId;
+            if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
+                return false;
+            if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
+                return false;
+
+            float now = HighLatencyInputSync.PacketTimeNow();
+            if (now < 0f)
+                return false;
+
+            float delay = Mathf.Clamp(
+                HighLatencyInputSync.GetDelaySeconds(),
+                ScheduledParryLeadMinSeconds,
+                ScheduledParryLeadMaxSeconds);
+            if (delay <= ScheduledParryLeadMinSeconds)
+                return false;
+
+            float executeAt = now + delay;
+            HostScheduledBuiltInParryEffects.Add(effectId);
+            HostScheduledBuiltInParries[effectId] = new ScheduledHostBuiltInParry
+            {
+                Effect = effect,
+                ExecuteAt = executeAt,
+            };
+            BroadcastBuiltInParryVisual(effect, targetPlayerId, executeAt);
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Scheduled host built-in death-heart parry for "
+                + targetPlayerId
+                + " at battle clock "
+                + executeAt.ToString("0.000")
+                + "s.");
+            return true;
+        }
+
+        public static bool IsHostBuiltInParrySwitchPending(PlayerDeathEffect effect)
+        {
+            return effect != null && HostScheduledBuiltInParryEffects.Contains(effect.GetInstanceID());
         }
 
         public static void NotifyBuiltInParrySwitch(PlayerDeathEffect effect)
@@ -210,17 +380,22 @@ namespace CupheadOnline.Sync
             if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
                 return;
 
+            BroadcastBuiltInParryVisual(effect, targetPlayerId, GetCurrentHostBattleElapsed());
+        }
+
+        static void BroadcastBuiltInParryVisual(
+            PlayerDeathEffect effect,
+            PlayerId targetPlayerId,
+            float hostBattleElapsed)
+        {
+            if (effect == null || Plugin.Net == null)
+                return;
+
             int effectId = effect.GetInstanceID();
             if (!BroadcastedBuiltInVisuals.Add(effectId))
                 return;
 
             var position = effect.transform.position;
-            float localElapsed;
-            float hostElapsed;
-            float offset;
-            float hostBattleElapsed = SessionSync.TryGetBattleAssistTiming(out localElapsed, out hostElapsed, out offset)
-                ? hostElapsed
-                : -1f;
 
             var pkt = new ReviveVisualPacket
             {
@@ -244,51 +419,211 @@ namespace CupheadOnline.Sync
                 + ").");
         }
 
-        public static void NotifyBuiltInParryAnimComplete(PlayerDeathEffect effect)
+        static float GetCurrentHostBattleElapsed()
+        {
+            float now = HighLatencyInputSync.PacketTimeNow();
+            if (now >= 0f)
+                return now;
+
+            float localElapsed;
+            float hostElapsed;
+            float offset;
+            return SessionSync.TryGetBattleAssistTiming(out localElapsed, out hostElapsed, out offset)
+                ? hostElapsed
+                : -1f;
+        }
+
+        static void ExecuteDueHostBuiltInParries()
+        {
+            if (HostScheduledBuiltInParries.Count == 0)
+                return;
+
+            float now = HighLatencyInputSync.PacketTimeNow();
+            if (now < 0f)
+                return;
+
+            ScratchScheduledHostParryIds.Clear();
+            foreach (var entry in HostScheduledBuiltInParries)
+            {
+                if (entry.Value == null || entry.Value.ExecuteAt <= now)
+                    ScratchScheduledHostParryIds.Add(entry.Key);
+            }
+
+            for (int i = 0; i < ScratchScheduledHostParryIds.Count; i++)
+            {
+                int effectId = ScratchScheduledHostParryIds[i];
+                ScheduledHostBuiltInParry scheduled;
+                if (!HostScheduledBuiltInParries.TryGetValue(effectId, out scheduled))
+                    continue;
+
+                HostScheduledBuiltInParries.Remove(effectId);
+                HostScheduledBuiltInParryEffects.Remove(effectId);
+                ExecuteScheduledHostBuiltInParrySwitch(
+                    scheduled == null ? null : scheduled.Effect,
+                    effectId);
+            }
+        }
+
+        static void ExecuteScheduledHostBuiltInParrySwitch(PlayerDeathEffect effect, int effectId)
+        {
+            if (effect == null || PlayerDeathEffectOnParrySwitchMethod == null)
+                return;
+
+            HostExecutingScheduledBuiltInParryEffects.Add(effectId);
+            try
+            {
+                PlayerDeathEffectOnParrySwitchMethod.Invoke(effect, null);
+                TryScheduleHostBuiltInAnimComplete(effect, effectId);
+            }
+            finally
+            {
+                HostExecutingScheduledBuiltInParryEffects.Remove(effectId);
+            }
+        }
+
+        static void TryScheduleHostBuiltInAnimComplete(PlayerDeathEffect effect, int effectId)
         {
             if (!MultiplayerSession.IsActive
              || !MultiplayerSession.IsHost
-             || Plugin.Net == null
-             || !Plugin.Net.IsConnected
-             || effect == null)
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
+             || effect == null
+             || Plugin.Instance == null
+             || PlayerDeathEffectOnReviveParryAnimCompleteMethod == null)
             {
                 return;
             }
-
-            ExtraParticipantDeathBubbleTag extraTag;
-            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
-                return;
 
             PlayerId targetPlayerId;
             if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
                 return;
             if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
                 return;
+            if (!HostBuiltInAnimCompletionFallbacks.Add(effectId))
+                return;
 
+            Plugin.Instance.StartCoroutine(
+                CompleteHostBuiltInParryAnimAfterScheduledVisual(effect, targetPlayerId, effectId));
+        }
+
+        static IEnumerator CompleteHostBuiltInParryAnimAfterScheduledVisual(
+            PlayerDeathEffect effect,
+            PlayerId targetPlayerId,
+            int effectId)
+        {
+            float completeAt = Time.unscaledTime + BuiltInAnimCompleteFallbackSeconds;
+            while (Time.unscaledTime < completeAt)
+                yield return null;
+
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsHost
+             || effect == null)
+            {
+                yield break;
+            }
+
+            var currentEffect = FindLocalDeathEffect(targetPlayerId);
+            if (currentEffect != effect)
+                yield break;
+
+            try
+            {
+                PlayerDeathEffectOnReviveParryAnimCompleteMethod.Invoke(effect, null);
+                Plugin.Log.LogInfo(
+                    "[ReviveSync] Completed host built-in revive animation after scheduled visual for "
+                    + targetPlayerId
+                    + ".");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(
+                    "[ReviveSync] Could not complete host built-in revive animation for "
+                    + targetPlayerId
+                    + ": "
+                    + ex.Message);
+            }
+        }
+
+        public static bool BeginHostBuiltInParryAnimComplete(PlayerDeathEffect effect)
+        {
+            PlayerId targetPlayerId;
+            if (!ShouldHandleHostBuiltInParryAnimComplete(effect, out targetPlayerId))
+                return false;
+
+            _hostBuiltInReviveStatusSuppressDepth++;
+            return true;
+        }
+
+        public static void NotifyBuiltInParryAnimComplete(PlayerDeathEffect effect, bool hostSuppressionStarted)
+        {
+            try
+            {
+                PlayerId targetPlayerId;
+                if (!ShouldHandleHostBuiltInParryAnimComplete(effect, out targetPlayerId))
+                    return;
+
+                bool localSuppressionStarted = !hostSuppressionStarted;
+                if (localSuppressionStarted)
+                    _hostBuiltInReviveStatusSuppressDepth++;
+
+                try
+                {
+                    CompleteHostBuiltInParryAnim(effect, targetPlayerId);
+                }
+                finally
+                {
+                    if (localSuppressionStarted)
+                        EndHostBuiltInReviveStatusSuppression();
+                }
+            }
+            finally
+            {
+                if (hostSuppressionStarted)
+                    EndHostBuiltInReviveStatusSuppression();
+            }
+        }
+
+        static void CompleteHostBuiltInParryAnim(PlayerDeathEffect effect, PlayerId targetPlayerId)
+        {
             var target = GetPlayerSafe(targetPlayerId);
             if (target == null || target.stats == null)
                 return;
-            if (!target.IsDead && target.stats.Health > 0 && target.gameObject != null && target.gameObject.activeInHierarchy)
-                return;
 
-            PlayerId donorPlayerId = targetPlayerId == PlayerId.PlayerOne
-                ? PlayerId.PlayerTwo
-                : PlayerId.PlayerOne;
-            Vector2 revivePosition = effect.transform.position;
+            bool alreadyRevived = !target.IsDead
+                && target.stats.Health > 0
+                && target.gameObject != null
+                && target.gameObject.activeInHierarchy;
 
-            ResolveHostReviveRequest(
-                (byte)donorPlayerId,
-                revivePosition,
-                MultiplayerSession.Tick,
-                Plugin.Net);
-
-            if (target.IsDead
-             || target.stats.Health <= 0
-             || target.gameObject == null
-             || !target.gameObject.activeInHierarchy)
+            if (!alreadyRevived)
             {
-                ApplyLocalRevive(targetPlayerId, revivePosition);
+                PlayerId donorPlayerId = targetPlayerId == PlayerId.PlayerOne
+                    ? PlayerId.PlayerTwo
+                    : PlayerId.PlayerOne;
+                Vector2 revivePosition = effect.transform.position;
+
+                _deferHostBuiltInReviveStatus = true;
+                try
+                {
+                    ResolveHostReviveRequest(
+                        (byte)donorPlayerId,
+                        revivePosition,
+                        MultiplayerSession.Tick,
+                        Plugin.Net);
+
+                    if (target.IsDead
+                     || target.stats.Health <= 0
+                     || target.gameObject == null
+                     || !target.gameObject.activeInHierarchy)
+                    {
+                        ApplyLocalRevive(targetPlayerId, revivePosition);
+                    }
+                }
+                finally
+                {
+                    _deferHostBuiltInReviveStatus = false;
+                }
             }
+
+            QueueBuiltInFinalStatus(targetPlayerId);
 
             Plugin.Log.LogInfo(
                 "[ReviveSync] Resolved host built-in revive for "
@@ -325,6 +660,19 @@ namespace CupheadOnline.Sync
                 return false;
 
             int effectId = effect.GetInstanceID();
+            if (HostAuthorizedBuiltInParryEffects.Contains(effectId))
+                return false;
+            if (HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers())
+            {
+                if (SuppressedClientRemoteBuiltInParrySwitches.Add(effectId))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Suppressed early client-local parry visual on remote-owned "
+                        + targetPlayerId
+                        + " death heart; waiting for host-timed revive visual.");
+                }
+                return true;
+            }
             if (ClientRemoteBuiltInParryStartedAt.ContainsKey(effectId))
                 return true;
 
@@ -355,6 +703,42 @@ namespace CupheadOnline.Sync
             }
         }
 
+        public static bool TrySuppressClientBuiltInParrySwitchUntilHost(PlayerDeathEffect effect)
+        {
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsClient
+             || effect == null
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers())
+            {
+                return false;
+            }
+
+            int effectId = effect.GetInstanceID();
+            if (HostAuthorizedBuiltInParryEffects.Contains(effectId))
+                return false;
+
+            ExtraParticipantDeathBubbleTag extraTag;
+            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
+                return false;
+
+            PlayerId targetPlayerId;
+            if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
+                return false;
+            if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
+                return false;
+            if (!MultiplayerSession.IsAuthoritativePlayer(targetPlayerId))
+                return false;
+
+            if (SuppressedClientLocalBuiltInParrySwitches.Add(effectId))
+            {
+                Plugin.Log.LogInfo(
+                    "[ReviveSync] Suppressed client-local built-in death-heart parry for "
+                    + targetPlayerId
+                    + "; waiting for host-authorized revive visual.");
+            }
+            return true;
+        }
+
         public static bool TrySuppressClientRemoteBuiltInParryAnimComplete(PlayerDeathEffect effect)
         {
             if (!MultiplayerSession.IsActive
@@ -370,7 +754,27 @@ namespace CupheadOnline.Sync
             if (targetPlayerId != PlayerId.PlayerOne && targetPlayerId != PlayerId.PlayerTwo)
                 return false;
             if (MultiplayerSession.IsAuthoritativePlayer(targetPlayerId))
+            {
+                if (ShouldWaitForHostBuiltInReviveStatus(targetPlayerId))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Allowing local revive completion for authoritative "
+                        + targetPlayerId
+                        + " death heart; host final status will reconcile.");
+                }
+
                 return false;
+            }
+
+            if (HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
+             && HostAuthorizedBuiltInParryEffects.Contains(effect.GetInstanceID()))
+            {
+                Plugin.Log.LogInfo(
+                    "[ReviveSync] Allowing host-authorized proxy revive completion for remote-owned "
+                    + targetPlayerId
+                    + " death heart.");
+                return false;
+            }
 
             Plugin.Log.LogInfo(
                 "[ReviveSync] Suppressed client-local revive completion for remote-owned "
@@ -381,9 +785,17 @@ namespace CupheadOnline.Sync
 
         public static void ApplyReviveVisual(ReviveVisualPacket pkt)
         {
+            ApplyReviveVisual(pkt, allowSchedule: true);
+        }
+
+        static void ApplyReviveVisual(ReviveVisualPacket pkt, bool allowSchedule)
+        {
             if (!MultiplayerSession.IsActive || !MultiplayerSession.IsClient)
                 return;
             if (!pkt.ParrySwitch || pkt.TargetParticipantId > (byte)PlayerId.PlayerTwo)
+                return;
+
+            if (allowSchedule && TryScheduleClientBuiltInParryVisual(pkt))
                 return;
 
             var targetPlayerId = (PlayerId)pkt.TargetParticipantId;
@@ -391,15 +803,18 @@ namespace CupheadOnline.Sync
             if (effect == null)
                 return;
 
-            effect.transform.position = new Vector3(pkt.PosX, pkt.PosY, effect.transform.position.z);
             bool alreadyExiting = IsDeathEffectExiting(effect);
-            bool localVisualAlreadyStarted = ClientRemoteBuiltInParryStartedAt.ContainsKey(effect.GetInstanceID());
+            int effectId = effect.GetInstanceID();
+            bool localVisualAlreadyStarted =
+                ClientRemoteBuiltInParryStartedAt.ContainsKey(effectId)
+                || SuppressedClientLocalBuiltInParrySwitches.Contains(effectId);
+            if (!localVisualAlreadyStarted)
+                effect.transform.position = new Vector3(pkt.PosX, pkt.PosY, effect.transform.position.z);
             if (PlayerDeathEffectOnParrySwitchMethod == null && !alreadyExiting && !localVisualAlreadyStarted)
                 return;
 
             try
             {
-                int effectId = effect.GetInstanceID();
                 HostAuthorizedBuiltInParryEffects.Add(effectId);
                 float localVisualAt;
                 MirroredBuiltInParryVisualAt[targetPlayerId] =
@@ -415,12 +830,22 @@ namespace CupheadOnline.Sync
                         + " at tick "
                         + pkt.Tick
                         + ".");
+                    TryScheduleClientBuiltInAnimComplete(effect, targetPlayerId);
                     return;
                 }
 
-                if (!TryBeginMirroredParrySwitch(effect, pkt))
+                bool scheduledDirect = ShouldInvokeScheduledParryDirectly(pkt);
+                if (scheduledDirect)
+                {
                     PlayerDeathEffectOnParrySwitchMethod.Invoke(effect, null);
-                _revivePauseCatchUpUntil = Time.unscaledTime + 2f;
+                }
+                else if (!TryBeginMirroredParrySwitch(effect, pkt))
+                {
+                    PlayerDeathEffectOnParrySwitchMethod.Invoke(effect, null);
+                }
+                TryScheduleClientBuiltInAnimComplete(effect, targetPlayerId);
+                if (!scheduledDirect)
+                    _revivePauseCatchUpUntil = Time.unscaledTime + 2f;
                 Plugin.Log.LogInfo(
                     "[ReviveSync] Mirrored built-in death-heart parry visual for "
                     + targetPlayerId
@@ -435,6 +860,236 @@ namespace CupheadOnline.Sync
                     + targetPlayerId
                     + ": "
                     + ex.Message);
+            }
+        }
+
+        static void TryScheduleClientBuiltInAnimComplete(PlayerDeathEffect effect, PlayerId targetPlayerId)
+        {
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsClient
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
+             || effect == null
+             || Plugin.Instance == null
+             || PlayerDeathEffectOnReviveParryAnimCompleteMethod == null)
+            {
+                return;
+            }
+
+            int effectId = effect.GetInstanceID();
+            if (!HostAuthorizedBuiltInParryEffects.Contains(effectId))
+                return;
+            if (!ClientBuiltInAnimCompletionFallbacks.Add(effectId))
+                return;
+
+            Plugin.Instance.StartCoroutine(
+                CompleteClientBuiltInParryAnimAfterHostVisual(effect, targetPlayerId, effectId));
+        }
+
+        static IEnumerator CompleteClientBuiltInParryAnimAfterHostVisual(
+            PlayerDeathEffect effect,
+            PlayerId targetPlayerId,
+            int effectId)
+        {
+            float completeAt = Time.unscaledTime + BuiltInAnimCompleteFallbackSeconds;
+            while (Time.unscaledTime < completeAt)
+                yield return null;
+
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsClient
+             || !HostAuthorizedBuiltInParryEffects.Contains(effectId)
+             || effect == null)
+            {
+                yield break;
+            }
+
+            var currentEffect = FindLocalDeathEffect(targetPlayerId);
+            if (currentEffect != effect)
+                yield break;
+
+            try
+            {
+                PlayerDeathEffectOnReviveParryAnimCompleteMethod.Invoke(effect, null);
+                MarkRecentBuiltInRevive(targetPlayerId);
+                CompleteAuthoritativeClientBuiltInReviveIfNeeded(effect, targetPlayerId);
+                EnsureBuiltInBodyVisible(
+                    GetPlayerSafe(targetPlayerId) as LevelPlayerController,
+                    "client built-in revive animation",
+                    replayReviveIfHidden: true);
+                Plugin.Log.LogInfo(
+                    "[ReviveSync] Completed client built-in revive animation after host-authorized visual for "
+                    + targetPlayerId
+                    + ".");
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(
+                    "[ReviveSync] Could not complete client-local built-in revive animation for "
+                    + targetPlayerId
+                    + ": "
+                    + ex.Message);
+            }
+        }
+
+        static void CompleteAuthoritativeClientBuiltInReviveIfNeeded(PlayerDeathEffect effect, PlayerId targetPlayerId)
+        {
+            if (!MultiplayerSession.IsClient
+             || !MultiplayerSession.IsAuthoritativePlayer(targetPlayerId)
+             || effect == null)
+            {
+                return;
+            }
+
+            var player = GetPlayerSafe(targetPlayerId);
+            if (player == null || player.stats == null)
+                return;
+            if (!player.IsDead && player.stats.Health > 0 && player.gameObject != null && player.gameObject.activeInHierarchy)
+                return;
+
+            Vector3 revivePosition = effect.transform.position;
+            ApplyLocalRevive(targetPlayerId, revivePosition, pushStatus: false);
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Completed authoritative client revive fallback for "
+                + targetPlayerId
+                + " at ("
+                + revivePosition.x.ToString("0.00")
+                + ","
+                + revivePosition.y.ToString("0.00")
+                + ").");
+        }
+
+        public static bool ShouldCorrectRecentlyRevivedBuiltInPlayer(PlayerId playerId)
+        {
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsClient
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers()
+             || playerId > PlayerId.PlayerTwo)
+            {
+                return false;
+            }
+
+            float until;
+            if (!RecentBuiltInRevives.TryGetValue(playerId, out until))
+                return false;
+
+            if (Time.unscaledTime <= until)
+                return true;
+
+            RecentBuiltInRevives.Remove(playerId);
+            return false;
+        }
+
+        static void MarkRecentBuiltInRevive(PlayerId playerId)
+        {
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            float until = Time.unscaledTime + BuiltInReviveCorrectionSeconds;
+            RecentBuiltInRevives[playerId] = until;
+            RecentBuiltInReviveDeathSuppressions[playerId] = until;
+        }
+
+        static void ExtendRecentBuiltInReviveDeathSuppression(PlayerId playerId, float seconds)
+        {
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            float until = Time.unscaledTime + Mathf.Max(0f, seconds);
+            float existing;
+            if (RecentBuiltInReviveDeathSuppressions.TryGetValue(playerId, out existing)
+             && existing > until)
+            {
+                return;
+            }
+
+            RecentBuiltInReviveDeathSuppressions[playerId] = until;
+        }
+
+        public static void CancelRecentBuiltInReviveCorrection(PlayerId playerId, string reason = "after local gameplay input")
+        {
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            if (!RecentBuiltInRevives.Remove(playerId))
+                return;
+
+            RecentBuiltInReviveInputUnlocks[playerId] = Time.unscaledTime + 2f;
+            ExtendRecentBuiltInReviveDeathSuppression(playerId, BuiltInRevivePostSettleDeathSuppressSeconds);
+            ReleaseBuiltInReviveMotorForImmediateControl(GetPlayerSafe(playerId) as LevelPlayerController);
+
+            if (Plugin.AutoRunLanSteamE2E)
+            {
+                Plugin.Log.LogInfo(
+                    "[ReviveSync] Cancelled recent revive correction for "
+                    + playerId
+                    + " "
+                    + reason
+                    + ".");
+            }
+        }
+
+        static bool ShouldInvokeScheduledParryDirectly(ReviveVisualPacket pkt)
+        {
+            return pkt.HasHostBattleElapsed
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
+        }
+
+        static bool TryScheduleClientBuiltInParryVisual(ReviveVisualPacket pkt)
+        {
+            if (!pkt.ParrySwitch
+             || !pkt.HasHostBattleElapsed
+             || Plugin.Instance == null
+             || !HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers())
+            {
+                return false;
+            }
+
+            float now = HighLatencyInputSync.PlayoutTimeNow();
+            float delay = pkt.HostBattleElapsed - now;
+            if (delay <= ScheduledParryLeadMinSeconds || delay > ScheduledParryLeadMaxSeconds + 0.5f)
+                return false;
+
+            long key = ((long)pkt.Tick << 8) | pkt.TargetParticipantId;
+            if (!ClientScheduledBuiltInParryKeys.Add(key))
+                return true;
+
+            ClientScheduledBuiltInParries[key] = new ScheduledClientBuiltInParry
+            {
+                Packet = pkt,
+                Key = key,
+            };
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Scheduled client built-in death-heart parry for "
+                + (PlayerId)pkt.TargetParticipantId
+                + " at host battle clock "
+                + pkt.HostBattleElapsed.ToString("0.000")
+                + "s.");
+            return true;
+        }
+
+        static void ExecuteDueClientBuiltInParries()
+        {
+            if (ClientScheduledBuiltInParries.Count == 0)
+                return;
+
+            float now = HighLatencyInputSync.PlayoutTimeNow();
+            ScratchScheduledClientParryKeys.Clear();
+            foreach (var entry in ClientScheduledBuiltInParries)
+            {
+                if (entry.Value == null || entry.Value.Packet.HostBattleElapsed <= now)
+                    ScratchScheduledClientParryKeys.Add(entry.Key);
+            }
+
+            for (int i = 0; i < ScratchScheduledClientParryKeys.Count; i++)
+            {
+                long key = ScratchScheduledClientParryKeys[i];
+                ScheduledClientBuiltInParry scheduled;
+                if (!ClientScheduledBuiltInParries.TryGetValue(key, out scheduled))
+                    continue;
+
+                ClientScheduledBuiltInParries.Remove(key);
+                ClientScheduledBuiltInParryKeys.Remove(key);
+                if (scheduled != null)
+                    ApplyReviveVisual(scheduled.Packet, allowSchedule: false);
             }
         }
 
@@ -594,10 +1249,17 @@ namespace CupheadOnline.Sync
                 return false;
             var pendingDeathEffect = FindLocalDeathEffect(playerId);
             if (!player.IsDead && pendingDeathEffect == null)
+            {
+                if (ShouldAcceptRecentHostBuiltInRevivePosition(pkt, fromRemote: true))
+                    return SnapBuiltInPlayerToHostReviveStatus(playerId, pkt);
+
                 return false;
+            }
 
             Vector2 revivePosition;
-            if (!TryGetHostRevivePosition(playerId, out revivePosition))
+            if (pkt.HasPosition)
+                revivePosition = new Vector2(pkt.PosX, pkt.PosY);
+            else if (!TryGetHostRevivePosition(playerId, out revivePosition))
                 revivePosition = player.center;
 
             if (ShouldDeferHostBuiltInRevive(playerId, pendingDeathEffect))
@@ -659,10 +1321,10 @@ namespace CupheadOnline.Sync
                 if (existing != null)
                     SuppressRemoteBuiltInBody(player);
 
-                Plugin.Log.LogInfo(
-                    "[ReviveSync] Mirrored host death for "
-                    + playerId
-                    + " from status tick "
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Mirrored host death for "
+                + playerId
+                + " from status tick "
                     + pkt.Tick
                     + ".");
                 return existing != null || player.IsDead;
@@ -683,11 +1345,89 @@ namespace CupheadOnline.Sync
             if (!ShouldSuppressRemoteBuiltInDeadBody(player))
             {
                 RestoreSuppressedBuiltInBody(player);
+                EnsureBuiltInBodyVisible(player, "dead body suppression ended");
                 return false;
             }
 
             SuppressRemoteBuiltInBody(player);
             return true;
+        }
+
+        public static bool ShouldAcceptRecentHostBuiltInRevivePosition(PlayerStatusPacket pkt, bool fromRemote)
+        {
+            if (!fromRemote
+             || !MultiplayerSession.IsActive
+             || !MultiplayerSession.IsClient
+             || pkt.ParticipantId > (byte)PlayerId.PlayerTwo
+             || pkt.IsDead
+             || pkt.Health <= 0
+             || !pkt.HasPosition
+             || pkt.PosY > -225f)
+            {
+                return false;
+            }
+
+            var playerId = (PlayerId)pkt.ParticipantId;
+            return ShouldCorrectRecentlyRevivedBuiltInPlayer(playerId);
+        }
+
+        static bool SnapBuiltInPlayerToHostReviveStatus(PlayerId playerId, PlayerStatusPacket pkt)
+        {
+            if (!pkt.HasPosition)
+                return false;
+
+            var player = GetPlayerSafe(playerId);
+            var levelPlayer = player as LevelPlayerController;
+            if (player == null)
+                return false;
+
+            if (levelPlayer != null)
+                RestoreSuppressedBuiltInBody(levelPlayer);
+
+            var target = new Vector3(pkt.PosX, pkt.PosY, player.transform.position.z);
+            player.transform.position = target;
+            if (levelPlayer != null && levelPlayer.motor != null)
+            {
+                levelPlayer.motor.transform.position =
+                    new Vector3(pkt.PosX, pkt.PosY, levelPlayer.motor.transform.position.z);
+                ReleaseBuiltInReviveMotorForImmediateControl(levelPlayer);
+                if (pkt.PosY <= -225f)
+                {
+                    try { Traverse.Create(levelPlayer.motor).Property("Grounded").SetValue(true); }
+                    catch { }
+                }
+            }
+
+            if (player.gameObject != null && !player.gameObject.activeSelf)
+                player.gameObject.SetActive(true);
+            if (player.stats != null && player.stats.Health <= 0)
+                player.stats.SetHealth(Mathf.Max(1, player.stats.HealthMax));
+            if (levelPlayer != null)
+                EnsureBuiltInBodyVisible(levelPlayer, "host final revive status", replayReviveIfHidden: true);
+
+            RecentBuiltInRevives.Remove(playerId);
+            RecentBuiltInReviveInputUnlocks[playerId] = Time.unscaledTime + BuiltInRevivePostSettleDeathSuppressSeconds;
+            ExtendRecentBuiltInReviveDeathSuppression(playerId, BuiltInRevivePostSettleDeathSuppressSeconds);
+
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Settled recently revived "
+                + playerId
+                + " to host final revive status at ("
+                + pkt.PosX.ToString("0.00")
+                + ","
+                + pkt.PosY.ToString("0.00")
+                + ") tick "
+                + pkt.Tick
+                + ".");
+            return true;
+        }
+
+        static bool ShouldWaitForHostBuiltInReviveStatus(PlayerId playerId)
+        {
+            return MultiplayerSession.IsClient
+                && Plugin.VanillaTwoPlayerOnline
+                && playerId <= PlayerId.PlayerTwo
+                && HighLatencyInputSync.ShouldSimulateBuiltInRemotePlayers();
         }
 
         public static bool ShouldSuppressRecentBuiltInReviveDeath(PlayerStatusPacket pkt, bool fromRemote)
@@ -699,22 +1439,33 @@ namespace CupheadOnline.Sync
 
             var playerId = (PlayerId)pkt.ParticipantId;
             float suppressUntil;
-            if (!RecentBuiltInRevives.TryGetValue(playerId, out suppressUntil))
+            if (!RecentBuiltInReviveDeathSuppressions.TryGetValue(playerId, out suppressUntil))
                 return false;
             if (Time.unscaledTime > suppressUntil)
             {
-                RecentBuiltInRevives.Remove(playerId);
+                RecentBuiltInReviveDeathSuppressions.Remove(playerId);
                 return false;
             }
 
-            Vector2 revivePosition;
-            if (!TryGetHostRevivePosition(playerId, out revivePosition))
+            var existingPlayer = GetPlayerSafe(playerId);
+            if (existingPlayer == null
+             || existingPlayer.IsDead
+             || existingPlayer.stats == null
+             || existingPlayer.stats.Health <= 0)
             {
-                var player = GetPlayerSafe(playerId);
-                revivePosition = player == null ? Vector2.zero : (Vector2)player.center;
+                Vector2 revivePosition;
+                if (!TryGetHostRevivePosition(playerId, out revivePosition))
+                {
+                    revivePosition = existingPlayer == null ? Vector2.zero : (Vector2)existingPlayer.center;
+                }
+
+                ApplyLocalRevive(playerId, revivePosition, pushStatus: false);
+            }
+            else
+            {
+                EnsureBuiltInBodyVisible(existingPlayer as LevelPlayerController, "stale death suppression");
             }
 
-            ApplyLocalRevive(playerId, revivePosition, pushStatus: false);
             Plugin.Log.LogInfo(
                 "[ReviveSync] Suppressed "
                 + (fromRemote ? "remote" : "local")
@@ -724,6 +1475,15 @@ namespace CupheadOnline.Sync
                 + pkt.Tick
                 + ".");
             return true;
+        }
+
+        public static bool IsUnsettledBuiltInReviveStatus(PlayerStatusPacket pkt)
+        {
+            return pkt.ParticipantId <= (byte)PlayerId.PlayerTwo
+                && !pkt.IsDead
+                && pkt.Health > 0
+                && pkt.HasPosition
+                && pkt.PosY > -225f;
         }
 
         public static void RestoreSuppressedBuiltInBody(LevelPlayerController player)
@@ -801,6 +1561,182 @@ namespace CupheadOnline.Sync
                 RestoreSuppressedBuiltInBody(ids[i]);
         }
 
+        static bool HasVisibleBuiltInBodyRenderer(LevelPlayerController player)
+        {
+            if (player == null)
+                return false;
+
+            var renderers = player.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null || !renderer.enabled || renderer.gameObject == null)
+                    continue;
+                if (renderer.gameObject.activeInHierarchy)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static void RememberVisibleBuiltInBodyRenderers(LevelPlayerController player)
+        {
+            if (player == null
+             || player.stats == null
+             || player.IsDead
+             || player.stats.Health <= 0
+             || player.gameObject == null
+             || !player.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            List<Renderer> visible = null;
+            var renderers = player.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null
+                 || !renderer.enabled
+                 || renderer.gameObject == null
+                 || !renderer.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (visible == null)
+                    visible = new List<Renderer>();
+                visible.Add(renderer);
+            }
+
+            if (visible != null && visible.Count > 0)
+                LastVisibleBuiltInBodyRenderers[player.id] = visible;
+        }
+
+        static bool RestoreLastVisibleBuiltInBodyRenderers(LevelPlayerController player, string reason)
+        {
+            if (player == null)
+                return false;
+
+            List<Renderer> renderers;
+            if (!LastVisibleBuiltInBodyRenderers.TryGetValue(player.id, out renderers)
+             || renderers == null
+             || renderers.Count == 0)
+            {
+                return false;
+            }
+
+            int restored = 0;
+            int activated = 0;
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null)
+                    continue;
+                if (renderer.gameObject != null && !renderer.gameObject.activeSelf)
+                {
+                    renderer.gameObject.SetActive(true);
+                    activated++;
+                }
+                if (!renderer.enabled)
+                {
+                    renderer.enabled = true;
+                    restored++;
+                }
+            }
+
+            if (!HasVisibleBuiltInBodyRenderer(player))
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Restored last visible built-in body renderer set for "
+                + player.id
+                + " after "
+                + reason
+                + " (renderers="
+                + renderers.Count
+                + ", re-enabled="
+                + restored
+                + ", reactivated="
+                + activated
+                + ").");
+            return true;
+        }
+
+        static void EnsureBuiltInBodyVisible(LevelPlayerController player, string reason)
+        {
+            EnsureBuiltInBodyVisible(player, reason, replayReviveIfHidden: false);
+        }
+
+        static void EnsureBuiltInBodyVisible(
+            LevelPlayerController player,
+            string reason,
+            bool replayReviveIfHidden)
+        {
+            if (player == null
+             || player.stats == null
+             || player.IsDead
+             || player.stats.Health <= 0
+             || player.gameObject == null)
+            {
+                return;
+            }
+
+            if (!player.gameObject.activeSelf)
+                player.gameObject.SetActive(true);
+            if (HasVisibleBuiltInBodyRenderer(player))
+                return;
+
+            if (replayReviveIfHidden)
+            {
+                var revivePosition = player.transform.position;
+                if (PlayerOnPreReviveMethod != null)
+                    PlayerOnPreReviveMethod.Invoke(player, new object[] { revivePosition });
+                if (PlayerOnReviveMethod != null)
+                    PlayerOnReviveMethod.Invoke(player, new object[] { revivePosition });
+                if (player.stats != null && player.stats.isChalice)
+                    player.motor.OnChaliceRevive();
+
+                if (HasVisibleBuiltInBodyRenderer(player))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Replayed built-in revive visibility for "
+                        + player.id
+                        + " after "
+                        + reason
+                        + ".");
+                    return;
+                }
+            }
+
+            if (RestoreLastVisibleBuiltInBodyRenderers(player, reason))
+                return;
+
+            var animator = player.animationController?.animator;
+            if (animator != null)
+            {
+                animator.enabled = true;
+                animator.Update(0f);
+                if (HasVisibleBuiltInBodyRenderer(player))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Refreshed built-in body animator visibility for "
+                        + player.id
+                        + " after "
+                        + reason
+                        + ".");
+                    return;
+                }
+            }
+
+            Plugin.Log.LogWarning(
+                "[ReviveSync] Could not restore visible built-in body renderers for "
+                + player.id
+                + " after "
+                + reason
+                + "; leaving renderer state unchanged to avoid enabling duplicate body parts.");
+        }
+
         static bool ShouldDeferHostBuiltInRevive(PlayerId playerId, PlayerDeathEffect pendingDeathEffect)
         {
             if (!MultiplayerSession.IsClient || Plugin.Instance == null)
@@ -821,10 +1757,13 @@ namespace CupheadOnline.Sync
             if (PendingHostBuiltInReviveTicks.TryGetValue(playerId, out existingTick)
              && !NetTick.IsOlder(existingTick, tick))
             {
+                if (existingTick == tick)
+                    PendingHostBuiltInRevivePositions[playerId] = revivePosition;
                 return;
             }
 
             PendingHostBuiltInReviveTicks[playerId] = tick;
+            PendingHostBuiltInRevivePositions[playerId] = revivePosition;
             Plugin.Instance.StartCoroutine(ApplyDeferredHostBuiltInRevive(playerId, revivePosition, tick));
         }
 
@@ -852,6 +1791,10 @@ namespace CupheadOnline.Sync
                 yield return null;
             }
 
+            float settleUntil = Time.unscaledTime + 0.2f;
+            while (Time.unscaledTime < settleUntil)
+                yield return null;
+
             uint latestTick;
             if (!PendingHostBuiltInReviveTicks.TryGetValue(playerId, out latestTick)
              || latestTick != tick)
@@ -860,6 +1803,10 @@ namespace CupheadOnline.Sync
             }
 
             PendingHostBuiltInReviveTicks.Remove(playerId);
+            Vector2 latestPosition;
+            if (PendingHostBuiltInRevivePositions.TryGetValue(playerId, out latestPosition))
+                revivePosition = latestPosition;
+            PendingHostBuiltInRevivePositions.Remove(playerId);
 
             var player = GetPlayerSafe(playerId);
             if (player == null)
@@ -930,44 +1877,305 @@ namespace CupheadOnline.Sync
             if (deathEffect != null && DeathEffectExitingField != null)
                 DeathEffectExitingField.SetValue(deathEffect, true);
 
+            var levelPlayer = player as LevelPlayerController;
+            if (levelPlayer != null)
+                RestoreSuppressedBuiltInBody(levelPlayer);
+
             if (PlayerOnPreReviveMethod != null)
                 PlayerOnPreReviveMethod.Invoke(player, new object[] { (Vector3)revivePosition });
             if (PlayerOnReviveMethod != null)
                 PlayerOnReviveMethod.Invoke(player, new object[] { (Vector3)revivePosition });
 
-            var levelPlayer = player as LevelPlayerController;
             if (levelPlayer != null && player.stats != null && player.stats.isChalice)
                 levelPlayer.motor.OnChaliceRevive();
             if (levelPlayer != null)
-                RestoreSuppressedBuiltInBody(levelPlayer);
+                ResetBuiltInReviveVelocity(levelPlayer);
 
             if (player.gameObject != null && !player.gameObject.activeSelf)
                 player.gameObject.SetActive(true);
             if (player.stats != null && player.stats.Health <= 0)
                 player.stats.SetHealth(Mathf.Max(1, player.stats.HealthMax));
+            if (levelPlayer != null)
+                EnsureBuiltInBodyVisible(levelPlayer, "local revive", replayReviveIfHidden: true);
 
             if (deathEffect != null)
                 UnityEngine.Object.Destroy(deathEffect.gameObject);
 
-            RecentBuiltInRevives[localPlayerId] = Time.unscaledTime + 2.0f;
+            MarkRecentBuiltInRevive(localPlayerId);
 
-            if (pushStatus)
+            bool deferBuiltInStatus = IsHostBuiltInReviveStatusSuppressed()
+                && MultiplayerSession.IsHost
+                && localPlayerId <= PlayerId.PlayerTwo;
+
+            if (pushStatus && !deferBuiltInStatus)
                 ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static void ResetBuiltInReviveVelocity(LevelPlayerController player)
+        {
+            if (player == null || player.motor == null)
+                return;
+
+            ReleaseBuiltInReviveMotorForImmediateControl(player);
+        }
+
+        static void ApplyRecentReviveInputUnlocks()
+        {
+            if (RecentBuiltInReviveInputUnlocks.Count == 0)
+                return;
+
+            var expired = new List<PlayerId>();
+            foreach (var entry in RecentBuiltInReviveInputUnlocks)
+            {
+                if (Time.unscaledTime > entry.Value)
+                {
+                    expired.Add(entry.Key);
+                    continue;
+                }
+
+                KeepBuiltInReviveMotorInputUnlocked(GetPlayerSafe(entry.Key) as LevelPlayerController);
+            }
+
+            for (int i = 0; i < expired.Count; i++)
+                RecentBuiltInReviveInputUnlocks.Remove(expired[i]);
+        }
+
+        public static void ReleaseBuiltInReviveMotorForImmediateControl(LevelPlayerController player)
+        {
+            if (player == null || player.motor == null)
+                return;
+
+            try { player.EnableInput(); }
+            catch { }
+
+            try
+            {
+                var motor = Traverse.Create(player.motor);
+                motor.Property("velocity").SetValue(Vector2.zero);
+                motor.Property("Locked").SetValue(false);
+                motor.Property("Grounded").SetValue(true);
+                motor.Property("Parrying").SetValue(false);
+                motor.Field("allowInput").SetValue(true);
+                motor.Field("allowJumping").SetValue(true);
+                motor.Field("allowFalling").SetValue(true);
+                motor.Field("forceLaunchUp").SetValue(false);
+                motor.Field("timeSinceInputBuffered").SetValue(0.134f);
+            }
+            catch
+            {
+            }
+
+            TryInvokeNestedMotorMethod(player.motor, "velocityManager", "Clear");
+            TrySetNestedMotorField(player.motor, "velocityManager", "yAxisForce", false);
+
+            TrySetNestedMotorEnum(player.motor, "hitManager", "state", 0);
+            TrySetNestedMotorField(player.motor, "hitManager", "timer", 0f);
+            TrySetNestedMotorField(player.motor, "hitManager", "direction", 0);
+
+            TrySetNestedMotorEnum(player.motor, "jumpManager", "state", 0);
+            TrySetNestedMotorField(player.motor, "jumpManager", "timer", 0f);
+            TrySetNestedMotorField(player.motor, "jumpManager", "timeSinceDownJump", 1000f);
+            TrySetNestedMotorField(player.motor, "jumpManager", "timeInAir", 0f);
+            TrySetNestedMotorField(player.motor, "jumpManager", "doubleJumped", false);
+            TrySetNestedMotorField(player.motor, "jumpManager", "ableToLand", true);
+
+            TrySetNestedMotorEnum(player.motor, "dashManager", "state", 0);
+            TrySetNestedMotorField(player.motor, "dashManager", "timer", 0f);
+            TrySetNestedMotorField(player.motor, "dashManager", "timeSinceGroundDash", 1000f);
+            TrySetNestedMotorField(player.motor, "dashManager", "chaliceParryCoolDown", false);
+
+            TrySetNestedMotorEnum(player.motor, "parryManager", "state", 0);
+            TrySetNestedMotorEnum(player.motor, "superManager", "state", 0);
+        }
+
+        static void KeepBuiltInReviveMotorInputUnlocked(LevelPlayerController player)
+        {
+            if (player == null || player.motor == null)
+                return;
+
+            try { player.EnableInput(); }
+            catch { }
+
+            try
+            {
+                var motor = Traverse.Create(player.motor);
+                motor.Property("Locked").SetValue(false);
+                motor.Field("allowInput").SetValue(true);
+                motor.Field("allowJumping").SetValue(true);
+                motor.Field("allowFalling").SetValue(true);
+                motor.Field("forceLaunchUp").SetValue(false);
+            }
+            catch
+            {
+            }
+        }
+
+        static void TrySetNestedMotorEnum(LevelPlayerMotor motor, string ownerFieldName, string fieldName, int value)
+        {
+            object owner = GetNestedMotorObject(motor, ownerFieldName);
+            if (owner == null)
+                return;
+
+            try
+            {
+                var field = owner.GetType().GetField(fieldName, AnyInstance);
+                if (field != null && field.FieldType.IsEnum)
+                    field.SetValue(owner, Enum.ToObject(field.FieldType, value));
+            }
+            catch
+            {
+            }
+        }
+
+        static void TrySetNestedMotorField(LevelPlayerMotor motor, string ownerFieldName, string fieldName, object value)
+        {
+            object owner = GetNestedMotorObject(motor, ownerFieldName);
+            if (owner == null)
+                return;
+
+            try
+            {
+                var field = owner.GetType().GetField(fieldName, AnyInstance);
+                if (field != null)
+                    field.SetValue(owner, value);
+            }
+            catch
+            {
+            }
+        }
+
+        static void TryInvokeNestedMotorMethod(LevelPlayerMotor motor, string ownerFieldName, string methodName)
+        {
+            object owner = GetNestedMotorObject(motor, ownerFieldName);
+            if (owner == null)
+                return;
+
+            try
+            {
+                var method = owner.GetType().GetMethod(methodName, AnyInstance, null, Type.EmptyTypes, null);
+                if (method != null)
+                    method.Invoke(owner, null);
+            }
+            catch
+            {
+            }
+        }
+
+        static object GetNestedMotorObject(LevelPlayerMotor motor, string fieldName)
+        {
+            if (motor == null || string.IsNullOrEmpty(fieldName))
+                return null;
+
+            try
+            {
+                var field = typeof(LevelPlayerMotor).GetField(fieldName, AnyInstance);
+                return field == null ? null : field.GetValue(motor);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        static void QueueBuiltInFinalStatus(PlayerId playerId)
+        {
+            if (!MultiplayerSession.IsHost || Plugin.Instance == null)
+                return;
+            if (playerId > PlayerId.PlayerTwo)
+                return;
+
+            uint tick = MultiplayerSession.Tick;
+            PendingBuiltInFinalStatusTicks[playerId] = tick;
+            Plugin.Instance.StartCoroutine(PushBuiltInFinalStatusAfterSettle(playerId, tick));
+        }
+
+        static IEnumerator PushBuiltInFinalStatusAfterSettle(PlayerId playerId, uint tick)
+        {
+            float minEndAt = Time.unscaledTime + BuiltInFinalStatusMinSettleSeconds;
+            float maxEndAt = Time.unscaledTime + BuiltInFinalStatusMaxSettleSeconds;
+            while (Time.unscaledTime < maxEndAt)
+            {
+                if (Time.unscaledTime >= minEndAt)
+                {
+                    var current = GetPlayerSafe(playerId);
+                    if (current != null && IsBuiltInReviveSettled(current))
+                        break;
+                }
+
+                yield return null;
+            }
+
+            uint latestTick;
+            if (!PendingBuiltInFinalStatusTicks.TryGetValue(playerId, out latestTick)
+             || latestTick != tick)
+            {
+                yield break;
+            }
+
+            PendingBuiltInFinalStatusTicks.Remove(playerId);
+            var player = GetPlayerSafe(playerId);
+            if (player != null)
+                ParticipantStatusTracker.PushLocalStatus(player);
+        }
+
+        static bool IsHostBuiltInReviveStatusSuppressed()
+        {
+            return _deferHostBuiltInReviveStatus || _hostBuiltInReviveStatusSuppressDepth > 0;
+        }
+
+        static void EndHostBuiltInReviveStatusSuppression()
+        {
+            if (_hostBuiltInReviveStatusSuppressDepth > 0)
+                _hostBuiltInReviveStatusSuppressDepth--;
+        }
+
+        static bool IsBuiltInReviveSettled(AbstractPlayerController player)
+        {
+            if (player == null)
+                return false;
+
+            var levelPlayer = player as LevelPlayerController;
+            if (levelPlayer != null && levelPlayer.motor != null && levelPlayer.motor.Grounded)
+                return true;
+
+            return player.transform.position.y <= -225f;
+        }
+
+        static bool ShouldHandleHostBuiltInParryAnimComplete(PlayerDeathEffect effect, out PlayerId targetPlayerId)
+        {
+            targetPlayerId = PlayerId.PlayerOne;
+            if (!MultiplayerSession.IsActive
+             || !MultiplayerSession.IsHost
+             || Plugin.Net == null
+             || !Plugin.Net.IsConnected
+             || effect == null)
+            {
+                return false;
+            }
+
+            ExtraParticipantDeathBubbleTag extraTag;
+            if (ExtraParticipantReviveVisuals.IsExtraBubble(effect, out extraTag))
+                return false;
+
+            if (!TryGetDeathEffectPlayerId(effect, out targetPlayerId))
+                return false;
+
+            return targetPlayerId == PlayerId.PlayerOne || targetPlayerId == PlayerId.PlayerTwo;
         }
 
         static bool TryGetHostRevivePosition(PlayerId playerId, out Vector2 position)
         {
-            PlayerStatePacket snapshot;
-            if (RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
-            {
-                position = new Vector2(snapshot.PosX, snapshot.PosY);
-                return true;
-            }
-
             var deathEffect = FindLocalDeathEffect(playerId);
             if (deathEffect != null)
             {
                 position = deathEffect.transform.position;
+                return true;
+            }
+
+            PlayerStatePacket snapshot;
+            if (RemotePlayer.TryGetLocalAuthoritySnapshot(playerId, out snapshot))
+            {
+                position = new Vector2(snapshot.PosX, snapshot.PosY);
                 return true;
             }
 

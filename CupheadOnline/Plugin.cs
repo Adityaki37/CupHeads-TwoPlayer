@@ -439,6 +439,7 @@ namespace CupheadOnline
             LocalDevSession.Update();
             LocalDevE2ETest.Update();
             LocalDevTutorialLauncher.Update();
+            ParticipantReviveController.Update();
             LanSteamE2ETest.Update();
             ClientInputFramePump.Update();
             LoadoutReplicator.Update();

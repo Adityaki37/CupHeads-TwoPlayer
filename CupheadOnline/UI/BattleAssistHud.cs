@@ -251,6 +251,13 @@ namespace CupheadOnline.UI
             string timeLine = "TIME " + FormatTime(localElapsed);
             if (SessionSync.TryGetBattleAssistTiming(out localElapsed, out hostElapsed, out localMinusHost))
             {
+                if (!MultiplayerSession.IsHost)
+                {
+                    float displayTransitSeconds = HighLatencyInputSync.EstimateOneWaySeconds();
+                    localElapsed += displayTransitSeconds;
+                    hostElapsed += displayTransitSeconds;
+                }
+
                 timeLine = MultiplayerSession.IsHost
                     ? "TIME LOCAL/HOST " + FormatTime(localElapsed)
                     : "TIME LOCAL " + FormatTime(localElapsed)

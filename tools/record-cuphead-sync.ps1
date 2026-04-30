@@ -786,6 +786,334 @@ Copy-Item -LiteralPath $hostLog -Destination $hostLogCopy -Force -ErrorAction Si
 Copy-Item -LiteralPath $clientLog -Destination $clientLogCopy -Force -ErrorAction SilentlyContinue
 $hostSummary = (($hostTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Released level start|Local level start gate|Guest-only shooting smoke|Fight smoke complete|pause menu|resume|pause sync|PAUSE/RESUME|game-over|Game-over|Retry|GAME OVER RETRY|HOST PASS|FAIL" } | Select-Object -Last 24) -join "`n"
 $clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "level-start visual|Level-start visual|Host released level start|Local level start gate|Client host-checkpoint pause/resume sync complete|Client pause/resume sync complete|pause menu|resume|game-over|Game-over|Retry|CLIENT GAME OVER RETRY|CLIENT PASS|FAIL|Received host fight checkpoint|Sanitized Player 1 loadout|Simulation drift detected|Host snapshots stalled" } | Select-Object -Last 24) -join "`n"
+
+function Parse-VisualPlayerSamples([string]$text, [string]$role) {
+    $samples = @()
+    $coord = "-?\d+(?:\.\d+)?"
+    $optionalBody = "(?: bodyPos=\($coord,$coord\))?(?: renderers=\d+/\d+)?"
+    $pattern = "Visual sample $role clock=(?<clock>$coord).*? context=(?<context>[^:]+): P1=.*? dead=(?<p1dead>True|False) .*? pos=\((?<p1x>$coord),(?<p1y>$coord)\)$optionalBody; P2=.*? dead=(?<p2dead>True|False) .*? pos=\((?<p2x>$coord),(?<p2y>$coord)\)"
+    foreach ($line in ($text -split "`r?`n")) {
+        $m = [regex]::Match($line, $pattern)
+        if (!$m.Success) { continue }
+        $samples += [pscustomobject]@{
+            Clock = [double]$m.Groups['clock'].Value
+            Context = $m.Groups['context'].Value
+            P1Dead = [bool]::Parse($m.Groups['p1dead'].Value)
+            P1X = [double]$m.Groups['p1x'].Value
+            P1Y = [double]$m.Groups['p1y'].Value
+            P2Dead = [bool]::Parse($m.Groups['p2dead'].Value)
+            P2X = [double]$m.Groups['p2x'].Value
+            P2Y = [double]$m.Groups['p2y'].Value
+            Line = $line
+        }
+    }
+
+    if ($samples.Count -le 1) { return @($samples) }
+
+    $epochs = @()
+    $current = @()
+    $previousClock = $null
+    foreach ($sample in $samples) {
+        if ($null -ne $previousClock -and $sample.Clock -lt ($previousClock - 0.25)) {
+            if ($current.Count -gt 0) { $epochs += ,@($current) }
+            $current = @()
+        }
+
+        $current += $sample
+        $previousClock = $sample.Clock
+    }
+    if ($current.Count -gt 0) { $epochs += ,@($current) }
+
+    $bestEpoch = @($samples)
+    $bestCount = -1
+    foreach ($epoch in $epochs) {
+        if ($epoch.Count -ge $bestCount) {
+            $bestCount = $epoch.Count
+            $bestEpoch = @($epoch)
+        }
+    }
+
+    return @($bestEpoch)
+}
+
+function Measure-PlayerPositionSync([object[]]$hostSamples, [object[]]$clientSamples) {
+    $clientByContext = @{}
+    foreach ($clientSample in $clientSamples) {
+        $contextKey = [string]$clientSample.Context
+        if (!$clientByContext.ContainsKey($contextKey)) {
+            $clientByContext[$contextKey] = New-Object System.Collections.ArrayList
+        }
+        [void]$clientByContext[$contextKey].Add($clientSample)
+    }
+    foreach ($key in @($clientByContext.Keys)) {
+        $clientByContext[$key] = @($clientByContext[$key] | Sort-Object Clock)
+    }
+
+    $matches = @()
+    $mismatches = @()
+    $maxDelta = 0.0
+    foreach ($hostSample in $hostSamples) {
+        $best = $null
+        $bestClockDelta = [double]::MaxValue
+        $bestInterpolated = $false
+        $candidates = if ($clientByContext.ContainsKey([string]$hostSample.Context)) { @($clientByContext[[string]$hostSample.Context]) } else { @($clientSamples) }
+
+        $previous = $null
+        $next = $null
+        foreach ($clientSample in $candidates) {
+            $clockDelta = [Math]::Abs($hostSample.Clock - $clientSample.Clock)
+            if ($clockDelta -lt $bestClockDelta) {
+                $bestClockDelta = $clockDelta
+                $best = $clientSample
+            }
+
+            if ($clientSample.Clock -le $hostSample.Clock) {
+                if ($null -eq $previous -or $clientSample.Clock -gt $previous.Clock) {
+                    $previous = $clientSample
+                }
+            }
+            if ($clientSample.Clock -ge $hostSample.Clock) {
+                if ($null -eq $next -or $clientSample.Clock -lt $next.Clock) {
+                    $next = $clientSample
+                }
+            }
+        }
+
+        if ($null -ne $previous -and $null -ne $next -and $next.Clock -gt $previous.Clock -and ($next.Clock - $previous.Clock) -le 0.16) {
+            $canInterpolate =
+                ($previous.P1Dead -eq $next.P1Dead) -and
+                ($previous.P2Dead -eq $next.P2Dead)
+            if ($canInterpolate) {
+                $t = ($hostSample.Clock - $previous.Clock) / ($next.Clock - $previous.Clock)
+                $best = [pscustomobject]@{
+                    Clock = $hostSample.Clock
+                    Context = $hostSample.Context
+                    P1Dead = $previous.P1Dead
+                    P1X = $previous.P1X + (($next.P1X - $previous.P1X) * $t)
+                    P1Y = $previous.P1Y + (($next.P1Y - $previous.P1Y) * $t)
+                    P2Dead = $previous.P2Dead
+                    P2X = $previous.P2X + (($next.P2X - $previous.P2X) * $t)
+                    P2Y = $previous.P2Y + (($next.P2Y - $previous.P2Y) * $t)
+                    Line = "interpolated"
+                }
+                $bestClockDelta = 0.0
+                $bestInterpolated = $true
+            }
+        }
+
+        if ($null -eq $best -or $bestClockDelta -gt 0.20) { continue }
+
+        $p1Delta = [Math]::Sqrt([Math]::Pow($hostSample.P1X - $best.P1X, 2) + [Math]::Pow($hostSample.P1Y - $best.P1Y, 2))
+        $p2Delta = [Math]::Sqrt([Math]::Pow($hostSample.P2X - $best.P2X, 2) + [Math]::Pow($hostSample.P2Y - $best.P2Y, 2))
+        $deadMatch = ($hostSample.P1Dead -eq $best.P1Dead) -and ($hostSample.P2Dead -eq $best.P2Dead)
+        $sample = [pscustomobject]@{
+            HostClock = [Math]::Round($hostSample.Clock, 3)
+            ClientClock = [Math]::Round($best.Clock, 3)
+            ClockDelta = [Math]::Round($bestClockDelta, 3)
+            Interpolated = [bool]$bestInterpolated
+            P1Delta = [Math]::Round($p1Delta, 3)
+            P2Delta = [Math]::Round($p2Delta, 3)
+            DeadMatch = $deadMatch
+            Context = $hostSample.Context
+            HostP1 = ("{0:0.00},{1:0.00}" -f $hostSample.P1X, $hostSample.P1Y)
+            ClientP1 = ("{0:0.00},{1:0.00}" -f $best.P1X, $best.P1Y)
+            HostP2 = ("{0:0.00},{1:0.00}" -f $hostSample.P2X, $hostSample.P2Y)
+            ClientP2 = ("{0:0.00},{1:0.00}" -f $best.P2X, $best.P2Y)
+        }
+        $matches += $sample
+        $maxDelta = [Math]::Max($maxDelta, [Math]::Max($p1Delta, $p2Delta))
+        if (!$deadMatch -or $p1Delta -gt 35.0 -or $p2Delta -gt 35.0) {
+            $mismatches += $sample
+        }
+    }
+
+    $ratio = if ($matches.Count -gt 0) { [Math]::Round(1.0 - ($mismatches.Count / [double]$matches.Count), 4) } else { 1.0 }
+    return [pscustomobject]@{
+        SampleCount = $matches.Count
+        MismatchCount = $mismatches.Count
+        PassRatio = $ratio
+        MaxDelta = [Math]::Round($maxDelta, 3)
+        Mismatches = $mismatches
+    }
+}
+
+function Parse-VisualEnemySamples([string]$text, [string]$role) {
+    $samples = @()
+    $coord = "-?\d+(?:\.\d+)?"
+    $prefixPattern = "Visual sample $role clock=(?<clock>$coord).*? context=(?<context>[^:]+):"
+    $positionPattern = "; enemy=(?<name>[^@.;]+)@\((?<x>$coord),(?<y>$coord)\) anim=(?<anim>-?\d+):(?<animTime>$coord)\."
+    $nonePattern = "; enemy=(?<enemy>none)\."
+    foreach ($line in ($text -split "`r?`n")) {
+        $prefix = [regex]::Match($line, $prefixPattern)
+        if (!$prefix.Success) { continue }
+        $position = [regex]::Match($line, $positionPattern)
+        if ($position.Success) {
+            $samples += [pscustomobject]@{
+                Clock = [double]$prefix.Groups['clock'].Value
+                Context = $prefix.Groups['context'].Value
+                HasEnemy = $true
+                EnemyName = $position.Groups['name'].Value
+                EnemyX = [double]$position.Groups['x'].Value
+                EnemyY = [double]$position.Groups['y'].Value
+                AnimHash = [int]$position.Groups['anim'].Value
+                AnimTime = [double]$position.Groups['animTime'].Value
+                Line = $line
+            }
+        } else {
+            $none = [regex]::Match($line, $nonePattern)
+            if (!$none.Success) { continue }
+            $samples += [pscustomobject]@{
+                Clock = [double]$prefix.Groups['clock'].Value
+                Context = $prefix.Groups['context'].Value
+                HasEnemy = $false
+                EnemyName = $none.Groups['enemy'].Value
+                EnemyX = 0.0
+                EnemyY = 0.0
+                AnimHash = 0
+                AnimTime = 0.0
+                Line = $line
+            }
+        }
+    }
+
+    if ($samples.Count -le 1) { return @($samples) }
+
+    $epochs = @()
+    $current = @()
+    $previousClock = $null
+    foreach ($sample in $samples) {
+        if ($null -ne $previousClock -and $sample.Clock -lt ($previousClock - 0.25)) {
+            if ($current.Count -gt 0) { $epochs += ,@($current) }
+            $current = @()
+        }
+
+        $current += $sample
+        $previousClock = $sample.Clock
+    }
+    if ($current.Count -gt 0) { $epochs += ,@($current) }
+
+    $bestEpoch = @($samples)
+    $bestCount = -1
+    foreach ($epoch in $epochs) {
+        if ($epoch.Count -ge $bestCount) {
+            $bestCount = $epoch.Count
+            $bestEpoch = @($epoch)
+        }
+    }
+
+    return @($bestEpoch)
+}
+
+function Measure-EnemyPositionSync([object[]]$hostSamples, [object[]]$clientSamples) {
+    $clientByContext = @{}
+    foreach ($clientSample in $clientSamples) {
+        $contextKey = [string]$clientSample.Context
+        if (!$clientByContext.ContainsKey($contextKey)) {
+            $clientByContext[$contextKey] = New-Object System.Collections.ArrayList
+        }
+        [void]$clientByContext[$contextKey].Add($clientSample)
+    }
+    foreach ($key in @($clientByContext.Keys)) {
+        $clientByContext[$key] = @($clientByContext[$key] | Sort-Object Clock)
+    }
+
+    $matches = @()
+    $mismatches = @()
+    $maxDelta = 0.0
+    foreach ($hostSample in $hostSamples) {
+        $best = $null
+        $bestClockDelta = [double]::MaxValue
+        $bestInterpolated = $false
+        $candidates = if ($clientByContext.ContainsKey([string]$hostSample.Context)) { @($clientByContext[[string]$hostSample.Context]) } else { @($clientSamples) }
+
+        $previous = $null
+        $next = $null
+        foreach ($clientSample in $candidates) {
+            $clockDelta = [Math]::Abs($hostSample.Clock - $clientSample.Clock)
+            if ($clockDelta -lt $bestClockDelta) {
+                $bestClockDelta = $clockDelta
+                $best = $clientSample
+            }
+
+            if ($clientSample.Clock -le $hostSample.Clock) {
+                if ($null -eq $previous -or $clientSample.Clock -gt $previous.Clock) {
+                    $previous = $clientSample
+                }
+            }
+            if ($clientSample.Clock -ge $hostSample.Clock) {
+                if ($null -eq $next -or $clientSample.Clock -lt $next.Clock) {
+                    $next = $clientSample
+                }
+            }
+        }
+
+        if ($null -ne $previous -and $null -ne $next -and $next.Clock -gt $previous.Clock -and ($next.Clock - $previous.Clock) -le 0.16) {
+            $canInterpolate =
+                ($previous.HasEnemy -eq $next.HasEnemy) -and
+                ($previous.EnemyName -eq $next.EnemyName) -and
+                ($previous.AnimHash -eq $next.AnimHash)
+            if ($canInterpolate) {
+                $t = ($hostSample.Clock - $previous.Clock) / ($next.Clock - $previous.Clock)
+                $best = [pscustomobject]@{
+                    Clock = $hostSample.Clock
+                    Context = $hostSample.Context
+                    HasEnemy = $previous.HasEnemy
+                    EnemyName = $previous.EnemyName
+                    EnemyX = $previous.EnemyX + (($next.EnemyX - $previous.EnemyX) * $t)
+                    EnemyY = $previous.EnemyY + (($next.EnemyY - $previous.EnemyY) * $t)
+                    AnimHash = $previous.AnimHash
+                    AnimTime = $previous.AnimTime + (($next.AnimTime - $previous.AnimTime) * $t)
+                    Line = "interpolated"
+                }
+                $bestClockDelta = 0.0
+                $bestInterpolated = $true
+            }
+        }
+
+        if ($null -eq $best -or $bestClockDelta -gt 0.20) { continue }
+
+        $delta = if ($hostSample.HasEnemy -and $best.HasEnemy) {
+            [Math]::Sqrt([Math]::Pow($hostSample.EnemyX - $best.EnemyX, 2) + [Math]::Pow($hostSample.EnemyY - $best.EnemyY, 2))
+        } else {
+            0.0
+        }
+        $enemyMatch = ($hostSample.HasEnemy -eq $best.HasEnemy) -and ($hostSample.EnemyName -eq $best.EnemyName)
+        $animMatch = (!$hostSample.HasEnemy -or !$best.HasEnemy) -or ($hostSample.AnimHash -eq $best.AnimHash)
+        $sample = [pscustomobject]@{
+            HostClock = [Math]::Round($hostSample.Clock, 3)
+            ClientClock = [Math]::Round($best.Clock, 3)
+            ClockDelta = [Math]::Round($bestClockDelta, 3)
+            Interpolated = [bool]$bestInterpolated
+            EnemyDelta = [Math]::Round($delta, 3)
+            EnemyMatch = $enemyMatch
+            AnimMatch = $animMatch
+            Context = $hostSample.Context
+            HostEnemy = if ($hostSample.HasEnemy) { ("{0}@{1:0.00},{2:0.00}" -f $hostSample.EnemyName, $hostSample.EnemyX, $hostSample.EnemyY) } else { $hostSample.EnemyName }
+            ClientEnemy = if ($best.HasEnemy) { ("{0}@{1:0.00},{2:0.00}" -f $best.EnemyName, $best.EnemyX, $best.EnemyY) } else { $best.EnemyName }
+        }
+        $matches += $sample
+        $maxDelta = [Math]::Max($maxDelta, $delta)
+        if (!$enemyMatch -or $delta -gt 80.0) {
+            $mismatches += $sample
+        }
+    }
+
+    $ratio = if ($matches.Count -gt 0) { [Math]::Round(1.0 - ($mismatches.Count / [double]$matches.Count), 4) } else { 1.0 }
+    return [pscustomobject]@{
+        SampleCount = $matches.Count
+        MismatchCount = $mismatches.Count
+        PassRatio = $ratio
+        MaxDelta = [Math]::Round($maxDelta, 3)
+        Mismatches = $mismatches
+    }
+}
+
+$hostPlayerSamples = Parse-VisualPlayerSamples $hostTextFinal "host"
+$clientPlayerSamples = Parse-VisualPlayerSamples $clientTextFinal "client"
+$playerPositionSync = Measure-PlayerPositionSync $hostPlayerSamples $clientPlayerSamples
+$hostEnemySamples = Parse-VisualEnemySamples $hostTextFinal "host"
+$clientEnemySamples = Parse-VisualEnemySamples $clientTextFinal "client"
+$enemyPositionSync = Measure-EnemyPositionSync $hostEnemySamples $clientEnemySamples
 $legacyLoadoutFixtureExercised = $false
 $steamParityFailure = ""
 $syncHealthFailure = ""
@@ -840,6 +1168,18 @@ if ($blueObjectGateApplies -and $blueFrames.Count -ge 20 -and $blueSyncPassRatio
     $visualSyncFailure = " Visual frame sync below 95%: blue-object pass ratio " + $blueSyncPassRatio + " (" + ($blueFrames.Count - $blueMismatchFrames.Count) + "/" + $blueFrames.Count + ")."
     $syncHealthFailure = ($syncHealthFailure + $visualSyncFailure).Trim()
 }
+$playerPositionGateApplies = $playerPositionSync.SampleCount -ge 20
+if ($playerPositionGateApplies -and $playerPositionSync.PassRatio -lt 0.95) {
+    $failed = $true
+    $playerPositionFailure = " Player position sync below 95%: pass ratio " + $playerPositionSync.PassRatio + " (" + ($playerPositionSync.SampleCount - $playerPositionSync.MismatchCount) + "/" + $playerPositionSync.SampleCount + "), max delta " + $playerPositionSync.MaxDelta + " world units."
+    $syncHealthFailure = ($syncHealthFailure + $playerPositionFailure).Trim()
+}
+$enemyPositionGateApplies = ($TargetBossLevel -match '^(?i:Slime)$') -and $enemyPositionSync.SampleCount -ge 20
+if ($enemyPositionGateApplies -and $enemyPositionSync.PassRatio -lt 0.95) {
+    $failed = $true
+    $enemyPositionFailure = " Enemy position sync below 95%: pass ratio " + $enemyPositionSync.PassRatio + " (" + ($enemyPositionSync.SampleCount - $enemyPositionSync.MismatchCount) + "/" + $enemyPositionSync.SampleCount + "), max delta " + $enemyPositionSync.MaxDelta + " world units."
+    $syncHealthFailure = ($syncHealthFailure + $enemyPositionFailure).Trim()
+}
 $exactMatchFrames = @($metrics | Where-Object { $_.ExactMismatchPixels -eq 0 })
 $fullMismatchFrames = @($metrics | Where-Object { $_.ExactMismatchPixels -gt 0 })
 $maxOverall = ($metrics | Sort-Object MeanAbsDiffPerChannel -Descending | Select-Object -First 1)
@@ -880,6 +1220,18 @@ $report = [pscustomobject]@{
     BlueObjectSyncPassRatio = $blueSyncPassRatio
     BlueObjectSyncEnforced = [bool]$blueObjectGateApplies
     BlueObjectSyncGate = if ($blueObjectGateApplies) { "Slime boss body" } else { "not enforced for target '" + $TargetBossLevel + "'; blue pixels are not a stable boss-body signal" }
+    PlayerPositionSampleCount = $playerPositionSync.SampleCount
+    PlayerPositionMismatchCount = $playerPositionSync.MismatchCount
+    PlayerPositionSyncPassRatio = $playerPositionSync.PassRatio
+    PlayerPositionMaxDeltaWorld = $playerPositionSync.MaxDelta
+    PlayerPositionSyncEnforced = [bool]$playerPositionGateApplies
+    PlayerPositionMismatchSamples = $playerPositionSync.Mismatches
+    EnemyPositionSampleCount = $enemyPositionSync.SampleCount
+    EnemyPositionMismatchCount = $enemyPositionSync.MismatchCount
+    EnemyPositionSyncPassRatio = $enemyPositionSync.PassRatio
+    EnemyPositionMaxDeltaWorld = $enemyPositionSync.MaxDelta
+    EnemyPositionSyncEnforced = [bool]$enemyPositionGateApplies
+    EnemyPositionMismatchSamples = $enemyPositionSync.Mismatches
     ExactFullFrameMatchCount = $exactMatchFrames.Count
     ExactFullFrameMismatchCount = $fullMismatchFrames.Count
     ExactFullFrameMatch = $fullMismatchFrames.Count -eq 0

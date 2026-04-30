@@ -51,7 +51,15 @@ namespace CupheadOnline.Sync
 
             ParticipantStatus existing;
             bool hasExisting = _statuses.TryGetValue(pkt.ParticipantId, out existing);
+            if (hasExisting && ShouldWaitForSettledRemoteHostBuiltInRevive(existing, pkt, fromRemote))
+                return;
             bool acceptHostBuiltInRevive = hasExisting && ShouldAcceptRemoteHostBuiltInRevive(existing, pkt, fromRemote);
+            if (!acceptHostBuiltInRevive
+             && ParticipantReviveController.ShouldAcceptRecentHostBuiltInRevivePosition(pkt, fromRemote))
+            {
+                acceptHostBuiltInRevive = true;
+            }
+
             if (!acceptHostBuiltInRevive
              && ShouldIgnoreRemoteAliveStatusWhileLocallyDead(existing, pkt, fromRemote, hasExisting))
             {
@@ -177,6 +185,37 @@ namespace CupheadOnline.Sync
             return true;
         }
 
+        static bool ShouldWaitForSettledRemoteHostBuiltInRevive(
+            ParticipantStatus existing,
+            PlayerStatusPacket pkt,
+            bool fromRemote)
+        {
+            if (!fromRemote
+             || !MultiplayerSession.IsClient
+             || pkt.ParticipantId > (byte)PlayerId.PlayerTwo
+             || !existing.IsDead
+             || pkt.IsDead
+             || pkt.Health <= 0)
+            {
+                return false;
+            }
+
+            if (!ParticipantReviveController.IsUnsettledBuiltInReviveStatus(pkt))
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[StatusSync] Waiting for settled host revive status for local "
+                + (PlayerId)pkt.ParticipantId
+                + ": pos=("
+                + pkt.PosX.ToString("0.00")
+                + ","
+                + pkt.PosY.ToString("0.00")
+                + ") tick="
+                + pkt.Tick
+                + ".");
+            return true;
+        }
+
         public static bool TryGet(byte participantId, out ParticipantStatus status)
         {
             if (_statuses.TryGetValue(participantId, out status))
@@ -226,6 +265,7 @@ namespace CupheadOnline.Sync
             string characterName = GetCharacterName(player);
             if (player.stats.isChalice) flags |= 4;
             if (characterName == "Mugman") flags |= 8;
+            Vector3 position = player.transform.position;
 
             pkt = new PlayerStatusPacket
             {
@@ -234,6 +274,8 @@ namespace CupheadOnline.Sync
                 HealthMax = (byte)Mathf.Max(healthMax, 1),
                 Flags = flags,
                 Tick = MultiplayerSession.Tick,
+                PosX = position.x,
+                PosY = position.y,
             };
             return true;
         }
@@ -261,6 +303,8 @@ namespace CupheadOnline.Sync
         {
             PlayerStatusPacket pkt;
             if (!TryBuildLocalPacket(player, out pkt))
+                return;
+            if (ParticipantReviveController.ShouldSuppressHostBuiltInImmediateReviveStatus(player))
                 return;
             if (ParticipantReviveController.ShouldSuppressRecentBuiltInReviveDeath(pkt, fromRemote: false))
                 return;

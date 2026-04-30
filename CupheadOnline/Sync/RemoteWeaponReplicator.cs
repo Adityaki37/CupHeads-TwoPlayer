@@ -68,9 +68,15 @@ namespace CupheadOnline.Sync
             if (player.motor != null)
             {
                 var t = HarmonyLib.Traverse.Create(player.motor);
-                var dir = new Trilean2(pkt.AimX, pkt.AimY);
-                t.Property("LookDirection").SetValue(dir);
-                t.Property("TrueLookDirection").SetValue(dir);
+                int trueX = pkt.AimX != 0
+                    ? pkt.AimX
+                    : player.motor.TrueLookDirection.x.Value != 0
+                        ? player.motor.TrueLookDirection.x.Value
+                        : 1;
+                var look = new Trilean2(pkt.AimX, pkt.AimY);
+                var trueLook = new Trilean2(trueX, pkt.AimY);
+                t.Property("LookDirection").SetValue(look);
+                t.Property("TrueLookDirection").SetValue(trueLook);
             }
 
             var wm = player.weaponManager;

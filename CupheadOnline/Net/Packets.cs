@@ -90,6 +90,10 @@ namespace CupheadOnline.Net
         public uint Tick;
         public int AnimHash;
         public float AnimNormalizedTime;
+        public float StateTime;
+        public float VelX;
+        public float VelY;
+        public long StateUtcTicks;
 
         public bool Grounded => (Flags & 1) != 0;
         public bool Dashing => (Flags & 2) != 0;
@@ -112,6 +116,10 @@ namespace CupheadOnline.Net
             w.Write(Tick);
             w.Write(AnimHash);
             w.Write(AnimNormalizedTime);
+            w.Write(StateTime);
+            w.Write(VelX);
+            w.Write(VelY);
+            w.Write(StateUtcTicks);
         }
 
         public void Read(BinaryReader r)
@@ -126,10 +134,23 @@ namespace CupheadOnline.Net
             Tick = r.ReadUInt32();
             AnimHash = AnimState;
             AnimNormalizedTime = 0f;
+            StateTime = -1f;
+            VelX = 0f;
+            VelY = 0f;
+            StateUtcTicks = 0L;
             if (r.BaseStream.Position <= r.BaseStream.Length - 4)
                 AnimHash = r.ReadInt32();
             if (r.BaseStream.Position <= r.BaseStream.Length - 4)
                 AnimNormalizedTime = r.ReadSingle();
+            if (r.BaseStream.Position <= r.BaseStream.Length - 4)
+                StateTime = r.ReadSingle();
+            if (r.BaseStream.Position <= r.BaseStream.Length - 8)
+            {
+                VelX = r.ReadSingle();
+                VelY = r.ReadSingle();
+            }
+            if (r.BaseStream.Position <= r.BaseStream.Length - 8)
+                StateUtcTicks = r.ReadInt64();
         }
     }
 
@@ -600,11 +621,14 @@ namespace CupheadOnline.Net
         public byte HealthMax;
         public byte Flags;
         public uint Tick;
+        public float PosX;
+        public float PosY;
 
         public bool IsDead => (Flags & 1) != 0;
         public bool CanDonate => (Flags & 2) != 0;
         public bool IsChalice => (Flags & 4) != 0;
         public bool IsMugman => (Flags & 8) != 0;
+        public bool HasPosition => !float.IsNaN(PosX) && !float.IsNaN(PosY);
 
         public void Write(BinaryWriter w)
         {
@@ -613,6 +637,8 @@ namespace CupheadOnline.Net
             w.Write(HealthMax);
             w.Write(Flags);
             w.Write(Tick);
+            w.Write(PosX);
+            w.Write(PosY);
         }
 
         public void Read(BinaryReader r)
@@ -622,6 +648,13 @@ namespace CupheadOnline.Net
             HealthMax = r.ReadByte();
             Flags = r.ReadByte();
             Tick = r.ReadUInt32();
+            PosX = float.NaN;
+            PosY = float.NaN;
+            if (r.BaseStream.Position <= r.BaseStream.Length - 8)
+            {
+                PosX = r.ReadSingle();
+                PosY = r.ReadSingle();
+            }
         }
     }
 
@@ -716,6 +749,7 @@ namespace CupheadOnline.Net
         public float HostBattleElapsed;
 
         public bool ParrySwitch => (Flags & 1) != 0;
+        public bool PositionOnly => (Flags & 4) != 0;
         public bool HasHostBattleElapsed => HostBattleElapsed >= 0f;
 
         public void Write(BinaryWriter w)

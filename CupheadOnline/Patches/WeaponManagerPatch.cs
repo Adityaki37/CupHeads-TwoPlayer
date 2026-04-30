@@ -46,8 +46,8 @@ namespace CupheadOnline.Patches
             {
                 PlayerId  = (byte)player.id,
                 EventType = eventType,
-                AimX      = (sbyte)(motor?.LookDirection.x.Value ?? 1),
-                AimY      = (sbyte)(motor?.LookDirection.y.Value ?? 0),
+                AimX      = (sbyte)(motor?.TrueLookDirection.x.Value ?? 1),
+                AimY      = (sbyte)(motor?.TrueLookDirection.y.Value ?? 0),
                 WeaponId  = 0,
                 Tick      = MultiplayerSession.Tick,
                 PosX      = motor == null ? 0f : motor.transform.position.x,
@@ -69,7 +69,7 @@ namespace CupheadOnline.Patches
             {
                 PlayerId  = (byte)player.id,
                 EventType = 4, // switch
-                AimX      = (sbyte)(motor?.LookDirection.x.Value ?? 1),
+                AimX      = (sbyte)(motor?.TrueLookDirection.x.Value ?? 1),
                 AimY      = 0,
                 WeaponId  = (byte)next,
                 Tick      = MultiplayerSession.Tick,
@@ -99,8 +99,8 @@ namespace CupheadOnline.Patches
             {
                 PlayerId  = (byte)player.id,
                 EventType = 3, // parry
-                AimX      = (sbyte)(motor?.LookDirection.x.Value ?? 1),
-                AimY      = (sbyte)(motor?.LookDirection.y.Value ?? 0),
+                AimX      = (sbyte)(motor?.TrueLookDirection.x.Value ?? 1),
+                AimY      = (sbyte)(motor?.TrueLookDirection.y.Value ?? 0),
                 WeaponId  = 0,
                 Tick      = MultiplayerSession.Tick,
                 PosX      = motor == null ? 0f : motor.transform.position.x,
