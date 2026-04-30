@@ -107,6 +107,8 @@ namespace CupheadOnline.Sync
             new Dictionary<PlayerId, uint>();
         static readonly Dictionary<PlayerId, Dictionary<Renderer, bool>> SuppressedBuiltInBodyRenderers =
             new Dictionary<PlayerId, Dictionary<Renderer, bool>>();
+        static readonly Dictionary<PlayerId, List<Renderer>> LastVisibleBuiltInBodyRenderers =
+            new Dictionary<PlayerId, List<Renderer>>();
         static float _revivePauseCatchUpUntil = -1f;
         static bool _revivePauseCatchUpActive;
         static bool _deferHostBuiltInReviveStatus;
@@ -142,6 +144,7 @@ namespace CupheadOnline.Sync
             RecentBuiltInRevives.Clear();
             RecentBuiltInReviveDeathSuppressions.Clear();
             RecentBuiltInReviveInputUnlocks.Clear();
+            LastVisibleBuiltInBodyRenderers.Clear();
             _revivePauseCatchUpUntil = -1f;
             _revivePauseCatchUpActive = false;
             _deferHostBuiltInReviveStatus = false;
@@ -153,6 +156,8 @@ namespace CupheadOnline.Sync
             ExecuteDueHostBuiltInParries();
             ExecuteDueClientBuiltInParries();
             ApplyRecentReviveInputUnlocks();
+            RememberVisibleBuiltInBodyRenderers(GetPlayerSafe(PlayerId.PlayerOne) as LevelPlayerController);
+            RememberVisibleBuiltInBodyRenderers(GetPlayerSafe(PlayerId.PlayerTwo) as LevelPlayerController);
         }
 
         public static bool ShouldSuppressHostBuiltInImmediateReviveStatus(AbstractPlayerController player)
@@ -906,6 +911,10 @@ namespace CupheadOnline.Sync
                 PlayerDeathEffectOnReviveParryAnimCompleteMethod.Invoke(effect, null);
                 MarkRecentBuiltInRevive(targetPlayerId);
                 CompleteAuthoritativeClientBuiltInReviveIfNeeded(effect, targetPlayerId);
+                EnsureBuiltInBodyVisible(
+                    GetPlayerSafe(targetPlayerId) as LevelPlayerController,
+                    "client built-in revive animation",
+                    replayReviveIfHidden: true);
                 Plugin.Log.LogInfo(
                     "[ReviveSync] Completed client built-in revive animation after host-authorized visual for "
                     + targetPlayerId
@@ -1336,6 +1345,7 @@ namespace CupheadOnline.Sync
             if (!ShouldSuppressRemoteBuiltInDeadBody(player))
             {
                 RestoreSuppressedBuiltInBody(player);
+                EnsureBuiltInBodyVisible(player, "dead body suppression ended");
                 return false;
             }
 
@@ -1371,6 +1381,9 @@ namespace CupheadOnline.Sync
             if (player == null)
                 return false;
 
+            if (levelPlayer != null)
+                RestoreSuppressedBuiltInBody(levelPlayer);
+
             var target = new Vector3(pkt.PosX, pkt.PosY, player.transform.position.z);
             player.transform.position = target;
             if (levelPlayer != null && levelPlayer.motor != null)
@@ -1389,6 +1402,8 @@ namespace CupheadOnline.Sync
                 player.gameObject.SetActive(true);
             if (player.stats != null && player.stats.Health <= 0)
                 player.stats.SetHealth(Mathf.Max(1, player.stats.HealthMax));
+            if (levelPlayer != null)
+                EnsureBuiltInBodyVisible(levelPlayer, "host final revive status", replayReviveIfHidden: true);
 
             RecentBuiltInRevives.Remove(playerId);
             RecentBuiltInReviveInputUnlocks[playerId] = Time.unscaledTime + BuiltInRevivePostSettleDeathSuppressSeconds;
@@ -1445,6 +1460,10 @@ namespace CupheadOnline.Sync
                 }
 
                 ApplyLocalRevive(playerId, revivePosition, pushStatus: false);
+            }
+            else
+            {
+                EnsureBuiltInBodyVisible(existingPlayer as LevelPlayerController, "stale death suppression");
             }
 
             Plugin.Log.LogInfo(
@@ -1540,6 +1559,182 @@ namespace CupheadOnline.Sync
             var ids = new List<PlayerId>(SuppressedBuiltInBodyRenderers.Keys);
             for (int i = 0; i < ids.Count; i++)
                 RestoreSuppressedBuiltInBody(ids[i]);
+        }
+
+        static bool HasVisibleBuiltInBodyRenderer(LevelPlayerController player)
+        {
+            if (player == null)
+                return false;
+
+            var renderers = player.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null || !renderer.enabled || renderer.gameObject == null)
+                    continue;
+                if (renderer.gameObject.activeInHierarchy)
+                    return true;
+            }
+
+            return false;
+        }
+
+        static void RememberVisibleBuiltInBodyRenderers(LevelPlayerController player)
+        {
+            if (player == null
+             || player.stats == null
+             || player.IsDead
+             || player.stats.Health <= 0
+             || player.gameObject == null
+             || !player.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            List<Renderer> visible = null;
+            var renderers = player.GetComponentsInChildren<Renderer>(true);
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null
+                 || !renderer.enabled
+                 || renderer.gameObject == null
+                 || !renderer.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (visible == null)
+                    visible = new List<Renderer>();
+                visible.Add(renderer);
+            }
+
+            if (visible != null && visible.Count > 0)
+                LastVisibleBuiltInBodyRenderers[player.id] = visible;
+        }
+
+        static bool RestoreLastVisibleBuiltInBodyRenderers(LevelPlayerController player, string reason)
+        {
+            if (player == null)
+                return false;
+
+            List<Renderer> renderers;
+            if (!LastVisibleBuiltInBodyRenderers.TryGetValue(player.id, out renderers)
+             || renderers == null
+             || renderers.Count == 0)
+            {
+                return false;
+            }
+
+            int restored = 0;
+            int activated = 0;
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null)
+                    continue;
+                if (renderer.gameObject != null && !renderer.gameObject.activeSelf)
+                {
+                    renderer.gameObject.SetActive(true);
+                    activated++;
+                }
+                if (!renderer.enabled)
+                {
+                    renderer.enabled = true;
+                    restored++;
+                }
+            }
+
+            if (!HasVisibleBuiltInBodyRenderer(player))
+                return false;
+
+            Plugin.Log.LogInfo(
+                "[ReviveSync] Restored last visible built-in body renderer set for "
+                + player.id
+                + " after "
+                + reason
+                + " (renderers="
+                + renderers.Count
+                + ", re-enabled="
+                + restored
+                + ", reactivated="
+                + activated
+                + ").");
+            return true;
+        }
+
+        static void EnsureBuiltInBodyVisible(LevelPlayerController player, string reason)
+        {
+            EnsureBuiltInBodyVisible(player, reason, replayReviveIfHidden: false);
+        }
+
+        static void EnsureBuiltInBodyVisible(
+            LevelPlayerController player,
+            string reason,
+            bool replayReviveIfHidden)
+        {
+            if (player == null
+             || player.stats == null
+             || player.IsDead
+             || player.stats.Health <= 0
+             || player.gameObject == null)
+            {
+                return;
+            }
+
+            if (!player.gameObject.activeSelf)
+                player.gameObject.SetActive(true);
+            if (HasVisibleBuiltInBodyRenderer(player))
+                return;
+
+            if (replayReviveIfHidden)
+            {
+                var revivePosition = player.transform.position;
+                if (PlayerOnPreReviveMethod != null)
+                    PlayerOnPreReviveMethod.Invoke(player, new object[] { revivePosition });
+                if (PlayerOnReviveMethod != null)
+                    PlayerOnReviveMethod.Invoke(player, new object[] { revivePosition });
+                if (player.stats != null && player.stats.isChalice)
+                    player.motor.OnChaliceRevive();
+
+                if (HasVisibleBuiltInBodyRenderer(player))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Replayed built-in revive visibility for "
+                        + player.id
+                        + " after "
+                        + reason
+                        + ".");
+                    return;
+                }
+            }
+
+            if (RestoreLastVisibleBuiltInBodyRenderers(player, reason))
+                return;
+
+            var animator = player.animationController?.animator;
+            if (animator != null)
+            {
+                animator.enabled = true;
+                animator.Update(0f);
+                if (HasVisibleBuiltInBodyRenderer(player))
+                {
+                    Plugin.Log.LogInfo(
+                        "[ReviveSync] Refreshed built-in body animator visibility for "
+                        + player.id
+                        + " after "
+                        + reason
+                        + ".");
+                    return;
+                }
+            }
+
+            Plugin.Log.LogWarning(
+                "[ReviveSync] Could not restore visible built-in body renderers for "
+                + player.id
+                + " after "
+                + reason
+                + "; leaving renderer state unchanged to avoid enabling duplicate body parts.");
         }
 
         static bool ShouldDeferHostBuiltInRevive(PlayerId playerId, PlayerDeathEffect pendingDeathEffect)
@@ -1682,24 +1877,26 @@ namespace CupheadOnline.Sync
             if (deathEffect != null && DeathEffectExitingField != null)
                 DeathEffectExitingField.SetValue(deathEffect, true);
 
+            var levelPlayer = player as LevelPlayerController;
+            if (levelPlayer != null)
+                RestoreSuppressedBuiltInBody(levelPlayer);
+
             if (PlayerOnPreReviveMethod != null)
                 PlayerOnPreReviveMethod.Invoke(player, new object[] { (Vector3)revivePosition });
             if (PlayerOnReviveMethod != null)
                 PlayerOnReviveMethod.Invoke(player, new object[] { (Vector3)revivePosition });
 
-            var levelPlayer = player as LevelPlayerController;
             if (levelPlayer != null && player.stats != null && player.stats.isChalice)
                 levelPlayer.motor.OnChaliceRevive();
             if (levelPlayer != null)
-            {
                 ResetBuiltInReviveVelocity(levelPlayer);
-                RestoreSuppressedBuiltInBody(levelPlayer);
-            }
 
             if (player.gameObject != null && !player.gameObject.activeSelf)
                 player.gameObject.SetActive(true);
             if (player.stats != null && player.stats.Health <= 0)
                 player.stats.SetHealth(Mathf.Max(1, player.stats.HealthMax));
+            if (levelPlayer != null)
+                EnsureBuiltInBodyVisible(levelPlayer, "local revive", replayReviveIfHidden: true);
 
             if (deathEffect != null)
                 UnityEngine.Object.Destroy(deathEffect.gameObject);

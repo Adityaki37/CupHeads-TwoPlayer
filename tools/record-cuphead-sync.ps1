@@ -790,7 +790,7 @@ $clientSummary = (($clientTextFinal -split "`r?`n") | Where-Object { $_ -match "
 function Parse-VisualPlayerSamples([string]$text, [string]$role) {
     $samples = @()
     $coord = "-?\d+(?:\.\d+)?"
-    $optionalBody = "(?: bodyPos=\($coord,$coord\))?"
+    $optionalBody = "(?: bodyPos=\($coord,$coord\))?(?: renderers=\d+/\d+)?"
     $pattern = "Visual sample $role clock=(?<clock>$coord).*? context=(?<context>[^:]+): P1=.*? dead=(?<p1dead>True|False) .*? pos=\((?<p1x>$coord),(?<p1y>$coord)\)$optionalBody; P2=.*? dead=(?<p2dead>True|False) .*? pos=\((?<p2x>$coord),(?<p2y>$coord)\)"
     foreach ($line in ($text -split "`r?`n")) {
         $m = [regex]::Match($line, $pattern)

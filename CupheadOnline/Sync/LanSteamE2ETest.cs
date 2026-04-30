@@ -66,6 +66,7 @@ namespace CupheadOnline.Sync
         const float FightIntroReadyGrace = 0.75f;
         const float ScriptedStartLatencyCompensation = 1f;
         const float VisualPositionSampleInterval = 0.0625f;
+        const int InvisibleAliveSampleFailureThreshold = 4;
 
         static readonly BindingFlags InstanceAny =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -267,6 +268,10 @@ namespace CupheadOnline.Sync
         static float _clientVisualCombatLastSampleAt;
         static float _hostReviveLastSampleAt;
         static float _clientReviveLastSampleAt;
+        static int _hostP1InvisibleAliveSamples;
+        static int _hostP2InvisibleAliveSamples;
+        static int _clientP1InvisibleAliveSamples;
+        static int _clientP2InvisibleAliveSamples;
         static float _lastProjectileScanAt;
         static bool _guestOnlyDamageStarted;
         static bool _guestOnlyDamageVerified;
@@ -2202,6 +2207,23 @@ namespace CupheadOnline.Sync
                 return;
 
             lastSampleAt = now;
+            if (role == "host")
+            {
+                if (!ValidateAlivePlayerVisibility(role, context, p1, "P1", ref _hostP1InvisibleAliveSamples)
+                 || !ValidateAlivePlayerVisibility(role, context, p2, "P2", ref _hostP2InvisibleAliveSamples))
+                {
+                    return;
+                }
+            }
+            else if (role == "client")
+            {
+                if (!ValidateAlivePlayerVisibility(role, context, p1, "P1", ref _clientP1InvisibleAliveSamples)
+                 || !ValidateAlivePlayerVisibility(role, context, p2, "P2", ref _clientP2InvisibleAliveSamples))
+                {
+                    return;
+                }
+            }
+
             Log("Visual sample " + role
                 + " clock=" + HighLatencyInputSync.PacketTimeNow().ToString("0.000")
                 + " unscaled=" + Time.unscaledTime.ToString("0.000")
@@ -2756,6 +2778,85 @@ namespace CupheadOnline.Sync
                 && player.gameObject.activeInHierarchy;
         }
 
+        static bool ValidateAlivePlayerVisibility(
+            string role,
+            string context,
+            LevelPlayerController player,
+            string label,
+            ref int invisibleAliveSamples)
+        {
+            if (!IsAliveLevelPlayer(player))
+            {
+                invisibleAliveSamples = 0;
+                return true;
+            }
+
+            int visibleRenderers;
+            int totalRenderers;
+            GetLevelPlayerRendererCounts(player, out visibleRenderers, out totalRenderers);
+            if (visibleRenderers > 0)
+            {
+                invisibleAliveSamples = 0;
+                return true;
+            }
+
+            if (context != null
+             && context.IndexOf("revive", StringComparison.OrdinalIgnoreCase) >= 0
+             && player.transform.position.y > ReviveSettledY)
+            {
+                invisibleAliveSamples = 0;
+                return true;
+            }
+
+            invisibleAliveSamples++;
+            if (invisibleAliveSamples < InvisibleAliveSampleFailureThreshold)
+                return true;
+
+            Fail(role + " kept " + label + " alive but invisible for "
+                + invisibleAliveSamples
+                + " visual samples in "
+                + context
+                + ": "
+                + DescribeLevelPlayer(player)
+                + ".");
+            return false;
+        }
+
+        static void GetLevelPlayerRendererCounts(
+            LevelPlayerController player,
+            out int visibleRenderers,
+            out int totalRenderers)
+        {
+            visibleRenderers = 0;
+            totalRenderers = 0;
+            if (player == null)
+                return;
+
+            var renderers = player.GetComponentsInChildren<Renderer>(true);
+            totalRenderers = renderers.Length;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null
+                 || !renderer.enabled
+                 || renderer.gameObject == null
+                 || !renderer.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                visibleRenderers++;
+            }
+        }
+
+        static bool HasVisibleLevelPlayerRenderer(LevelPlayerController player)
+        {
+            int visibleRenderers;
+            int totalRenderers;
+            GetLevelPlayerRendererCounts(player, out visibleRenderers, out totalRenderers);
+            return visibleRenderers > 0;
+        }
+
         static bool IsScriptedReviveBodySettled(LevelPlayerController player)
         {
             if (!IsAliveLevelPlayer(player))
@@ -3305,10 +3406,10 @@ namespace CupheadOnline.Sync
                     return false;
                 }
 
-                if (!IsScriptedReviveBodySettled(p2))
+                if (!IsScriptedReviveBodySettled(p2) || !HasVisibleLevelPlayerRenderer(p2))
                 {
                     if (Time.unscaledTime - _hostReviveDeathAt > ReviveSmokeTimeout)
-                        Fail("Host Player Two revived but did not settle after the built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
+                        Fail("Host Player Two revived but did not settle visibly after the built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
                     return false;
                 }
 
@@ -3428,10 +3529,10 @@ namespace CupheadOnline.Sync
                     return false;
                 }
 
-                if (!IsScriptedReviveBodySettled(p1))
+                if (!IsScriptedReviveBodySettled(p1) || !HasVisibleLevelPlayerRenderer(p1))
                 {
                     if (Time.unscaledTime - _hostReverseReviveDeathAt > ReviveSmokeTimeout)
-                        Fail("Host Player One revived but did not settle after the reverse built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
+                        Fail("Host Player One revived but did not settle visibly after the reverse built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
                     return false;
                 }
 
@@ -3527,10 +3628,10 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            if (!IsScriptedReviveBodySettled(p2))
+            if (!IsScriptedReviveBodySettled(p2) || !HasVisibleLevelPlayerRenderer(p2))
             {
                 if (Time.unscaledTime - _clientReviveDeathAt > ReviveSmokeTimeout)
-                    Fail("Client Player Two revived but did not settle after the host built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
+                    Fail("Client Player Two revived but did not settle visibly after the host built-in parry revive: " + DescribeLevelPlayer(p2) + ".");
                 return;
             }
 
@@ -3625,10 +3726,10 @@ namespace CupheadOnline.Sync
                 return;
             }
 
-            if (!IsScriptedReviveBodySettled(p1))
+            if (!IsScriptedReviveBodySettled(p1) || !HasVisibleLevelPlayerRenderer(p1))
             {
                 if (Time.unscaledTime - _clientReverseReviveDeathAt > ReviveSmokeTimeout)
-                    Fail("Client Player One revived but did not settle after the reverse host built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
+                    Fail("Client Player One revived but did not settle visibly after the reverse host built-in parry revive: " + DescribeLevelPlayer(p1) + ".");
                 return;
             }
 
@@ -4363,6 +4464,10 @@ namespace CupheadOnline.Sync
                 _clientVisualCombatLastSampleAt = 0f;
                 _hostReviveLastSampleAt = 0f;
                 _clientReviveLastSampleAt = 0f;
+                _hostP1InvisibleAliveSamples = 0;
+                _hostP2InvisibleAliveSamples = 0;
+                _clientP1InvisibleAliveSamples = 0;
+                _clientP2InvisibleAliveSamples = 0;
                 _lastProjectileScanAt = 0f;
                 _guestOnlyDamageStarted = false;
                 _guestOnlyDamageVerified = false;
@@ -4478,6 +4583,9 @@ namespace CupheadOnline.Sync
             }
 
             string health = player.stats == null ? "no-stats" : player.stats.Health + "/" + player.stats.HealthMax;
+            int visibleRenderers;
+            int totalRenderers;
+            GetLevelPlayerRendererCounts(player, out visibleRenderers, out totalRenderers);
             string text = player.id
                 + " dead=" + player.IsDead
                 + " hp=" + health
@@ -4491,6 +4599,7 @@ namespace CupheadOnline.Sync
                     + ")";
             }
 
+            text += " renderers=" + visibleRenderers + "/" + totalRenderers;
             return text;
         }
     }
